@@ -11,8 +11,8 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: synthetic-monitor
-  cancel-in-progress: true
+  group: synthetic-monitor-${{ github.event.schedule }}
+  cancel-in-progress: false
 
 jobs:
   monitor:
