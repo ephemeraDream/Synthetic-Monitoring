@@ -1,0 +1,134 @@
+# Checkly 配置示例
+# 将此文件复制为 .checkly.yml 并根据实际情况修改
+
+# 项目配置
+projectName: blacklyte-synthetic-monitoring
+# checklyApiKey: ${CHECKLY_API_KEY}  # 从环境变量读取
+
+# 浏览器检查配置
+browserChecks:
+  # P0_HOME - US
+  - name: P0_HOME - US
+    activated: true
+    locations:
+      - us-east-1
+    schedule: "*/10 * * * *"
+    script: |
+      npx playwright test src/journeys/p0_home.spec.ts --project=desktop-chromium
+    environmentVariables:
+      TARGET: US
+    alertSettings:
+      escalationType: RUN_BASED
+      runBasedEscalation:
+        failedRunThreshold: 2
+      reminders:
+        intervals: [5, 10, 15]
+    tags:
+      - P0
+      - US
+      - desktop
+
+  # P0_HOME - CA
+  - name: P0_HOME - CA
+    activated: true
+    locations:
+      - us-east-1
+    schedule: "2-59/10 * * * *"
+    script: |
+      npx playwright test src/journeys/p0_home.spec.ts --project=desktop-chromium
+    environmentVariables:
+      TARGET: CA
+    alertSettings:
+      escalationType: RUN_BASED
+      runBasedEscalation:
+        failedRunThreshold: 2
+    tags:
+      - P0
+      - CA
+      - desktop
+
+  # P0_HOME - EU
+  - name: P0_HOME - EU
+    activated: true
+    locations:
+      - eu-central-1
+    schedule: "4-59/10 * * * *"
+    script: |
+      npx playwright test src/journeys/p0_home.spec.ts --project=desktop-chromium
+    environmentVariables:
+      TARGET: EU
+    alertSettings:
+      escalationType: RUN_BASED
+      runBasedEscalation:
+        failedRunThreshold: 2
+    tags:
+      - P0
+      - EU
+      - desktop
+
+  # P0_HOME - UK
+  - name: P0_HOME - UK
+    activated: true
+    locations:
+      - eu-west-2
+    schedule: "6-59/10 * * * *"
+    script: |
+      npx playwright test src/journeys/p0_home.spec.ts --project=desktop-chromium
+    environmentVariables:
+      TARGET: UK
+    alertSettings:
+      escalationType: RUN_BASED
+      runBasedEscalation:
+        failedRunThreshold: 2
+    tags:
+      - P0
+      - UK
+      - desktop
+
+  # P0_HOME - AU
+  - name: P0_HOME - AU
+    activated: true
+    locations:
+      - ap-southeast-2
+    schedule: "8-59/10 * * * *"
+    script: |
+      npx playwright test src/journeys/p0_home.spec.ts --project=desktop-chromium
+    environmentVariables:
+      TARGET: AU
+    alertSettings:
+      escalationType: RUN_BASED
+      runBasedEscalation:
+        failedRunThreshold: 2
+    tags:
+      - P0
+      - AU
+      - desktop
+
+  # P0_HOME - JP
+  - name: P0_HOME - JP
+    activated: true
+    locations:
+      - ap-northeast-1
+    schedule: "1-59/10 * * * *"
+    script: |
+      npx playwright test src/journeys/p0_home.spec.ts --project=desktop-chromium
+    environmentVariables:
+      TARGET: JP
+    alertSettings:
+      escalationType: RUN_BASED
+      runBasedEscalation:
+        failedRunThreshold: 2
+    tags:
+      - P0
+      - JP
+      - desktop
+
+# 注意：实际使用时需要为每个旅程（P0_COLLECTION, P0_PDP_ADD_TO_CART 等）
+# 创建类似的配置，每个旅程 × 6 个 Region = 多个检查
+
+# 告警渠道配置（示例）
+# alertChannels:
+#   - type: WEBHOOK
+#     url: ${FEISHU_WEBHOOK_URL}
+#     name: Feishu Webhook
+

@@ -1,0 +1,26 @@
+{
+  "name": "synthetic-blacklyte",
+  "version": "1.0.0",
+  "description": "Blacklyte 全球合成监控（Synthetic Monitoring）",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "test:ui": "playwright test --ui",
+    "test:debug": "playwright test --debug",
+    "test:headed": "playwright test --headed",
+    "test:report": "playwright show-report"
+  },
+  "keywords": [
+    "playwright",
+    "synthetic-monitoring",
+    "checkly",
+    "e2e"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@playwright/test": "^1.57.0",
+    "@types/node": "^20.10.0",
+    "typescript": "^5.3.3"
+  }
+}

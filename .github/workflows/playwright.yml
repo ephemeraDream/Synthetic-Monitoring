@@ -1,0 +1,61 @@
+name: Synthetic Monitoring
+
+on:
+  schedule:
+    - cron: "*/10 * * * *" # US
+    - cron: "1-59/30 * * * *" # JP
+    - cron: "2-59/30 * * * *" # CA
+    - cron: "4-59/30 * * * *" # EU
+    - cron: "6-59/30 * * * *" # UK
+    - cron: "8-59/30 * * * *" # AU
+  workflow_dispatch:
+
+concurrency:
+  group: synthetic-monitor
+  cancel-in-progress: true
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: lts/*
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Browsers
+        run: npx playwright install --with-deps
+
+      # 根据 cron 判断国家
+      - name: Set TARGET by cron
+        run: |
+          echo "CRON=${{ github.event.schedule }}" >> $GITHUB_ENV
+
+          if [[ "${{ github.event.schedule }}" == "*/10 * * * *" ]]; then
+            echo "TARGET=US" >> $GITHUB_ENV
+          elif [[ "${{ github.event.schedule }}" == "1-59/30 * * * *" ]]; then
+            echo "TARGET=JP" >> $GITHUB_ENV
+          elif [[ "${{ github.event.schedule }}" == "2-59/30 * * * *" ]]; then
+            echo "TARGET=CA" >> $GITHUB_ENV
+          elif [[ "${{ github.event.schedule }}" == "4-59/30 * * * *" ]]; then
+            echo "TARGET=EU" >> $GITHUB_ENV
+          elif [[ "${{ github.event.schedule }}" == "6-59/30 * * * *" ]]; then
+            echo "TARGET=UK" >> $GITHUB_ENV
+          elif [[ "${{ github.event.schedule }}" == "8-59/30 * * * *" ]]; then
+            echo "TARGET=AU" >> $GITHUB_ENV
+          fi
+
+      - name: Run Playwright tests
+        run: npx playwright test
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 30
