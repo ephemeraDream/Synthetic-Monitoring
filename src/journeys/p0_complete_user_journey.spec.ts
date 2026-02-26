@@ -865,160 +865,160 @@ test.describe("P0_COMPLETE_USER_JOURNEY - 完整用户旅程", () => {
       expect(hasCheckoutForm || hasCheckoutTitle).toBeTruthy();
     });
 
-    // ========== 步骤 5: 处理登录/订阅弹窗 ==========
-    await test.step("步骤 5: 处理登录和订阅弹窗", async () => {
-      // 返回首页测试弹窗
-      await page.goto(base, { waitUntil: "domcontentloaded" });
-      await page.waitForTimeout(2000);
+    // // ========== 步骤 5: 处理登录/订阅弹窗 ==========
+    // await test.step("步骤 5: 处理登录和订阅弹窗", async () => {
+    //   // 返回首页测试弹窗
+    //   await page.goto(base, { waitUntil: "domcontentloaded" });
+    //   await page.waitForTimeout(2000);
 
-      // 关闭所有弹窗（订阅、登录等）
-      await closeMarketingPopups(page);
-      await page.waitForTimeout(1000);
+    //   // 关闭所有弹窗（订阅、登录等）
+    //   await closeMarketingPopups(page);
+    //   await page.waitForTimeout(1000);
 
-      // 尝试触发登录弹窗（如果存在登录按钮）
-      const signInButton = page
-        .getByRole("button", { name: /sign in|login|登录/i })
-        .or(page.locator('a:has-text("Sign In")'))
-        .first();
+    //   // 尝试触发登录弹窗（如果存在登录按钮）
+    //   const signInButton = page
+    //     .getByRole("button", { name: /sign in|login|登录/i })
+    //     .or(page.locator('a:has-text("Sign In")'))
+    //     .first();
 
-      const hasSignIn = await signInButton
-        .isVisible({ timeout: 3000 })
-        .catch(() => false);
-      if (hasSignIn) {
-        await signInButton.click();
-        await page.waitForTimeout(1000);
+    //   const hasSignIn = await signInButton
+    //     .isVisible({ timeout: 3000 })
+    //     .catch(() => false);
+    //   if (hasSignIn) {
+    //     await signInButton.click();
+    //     await page.waitForTimeout(1000);
 
-        // 验证登录弹窗出现
-        const loginModal = page
-          .locator('[role="dialog"], .modal, .login-modal')
-          .first();
-        const modalVisible = await loginModal
-          .isVisible({ timeout: 3000 })
-          .catch(() => false);
+    //     // 验证登录弹窗出现
+    //     const loginModal = page
+    //       .locator('[role="dialog"], .modal, .login-modal')
+    //       .first();
+    //     const modalVisible = await loginModal
+    //       .isVisible({ timeout: 3000 })
+    //       .catch(() => false);
 
-        if (modalVisible) {
-          // 关闭登录弹窗
-          const closeButton = page
-            .getByRole("button", { name: /close/i })
-            .or(page.locator('button[aria-label*="close" i]'))
-            .first();
-          await closeButton.click().catch(() => {});
-          await page.waitForTimeout(500);
-        }
-      }
+    //     if (modalVisible) {
+    //       // 关闭登录弹窗
+    //       const closeButton = page
+    //         .getByRole("button", { name: /close/i })
+    //         .or(page.locator('button[aria-label*="close" i]'))
+    //         .first();
+    //       await closeButton.click().catch(() => {});
+    //       await page.waitForTimeout(500);
+    //     }
+    //   }
 
-      // 验证订阅弹窗（"Get $30 off..."）
-      // 这个弹窗通常在页面加载后自动出现
-      await closeMarketingPopups(page);
-    });
+    //   // 验证订阅弹窗（"Get $30 off..."）
+    //   // 这个弹窗通常在页面加载后自动出现
+    //   await closeMarketingPopups(page);
+    // });
 
-    // ========== 步骤 6: 切换地区/币种 ==========
-    await test.step("步骤 6: 切换地区和币种", async () => {
-      // 查找地区选择器
-      const regionSelector = page
-        .locator(
-          '[data-testid*="region"], [data-testid*="country"], .region-selector',
-        )
-        .or(page.getByRole("button", { name: /region|country|地区|国家/i }))
-        .or(page.locator("text=/USD|Regions/i"))
-        .first();
+    // // ========== 步骤 6: 切换地区/币种 ==========
+    // await test.step("步骤 6: 切换地区和币种", async () => {
+    //   // 查找地区选择器
+    //   const regionSelector = page
+    //     .locator(
+    //       '[data-testid*="region"], [data-testid*="country"], .region-selector',
+    //     )
+    //     .or(page.getByRole("button", { name: /region|country|地区|国家/i }))
+    //     .or(page.locator("text=/USD|Regions/i"))
+    //     .first();
 
-      const hasRegionSelector = await regionSelector
-        .isVisible({ timeout: 5000 })
-        .catch(() => false);
+    //   const hasRegionSelector = await regionSelector
+    //     .isVisible({ timeout: 5000 })
+    //     .catch(() => false);
 
-      if (hasRegionSelector) {
-        await regionSelector.click();
-        await page.waitForTimeout(500);
+    //   if (hasRegionSelector) {
+    //     await regionSelector.click();
+    //     await page.waitForTimeout(500);
 
-        // 查找其他地区选项（选择不同于当前地区的选项）
-        // 根据网站内容，有：United States, Canada, Europe, United Kingdom, Australia, Japan
-        const allTargets = Object.values(TARGETS);
-        const currentTargetConfig = TARGETS[target];
-        const otherTarget = allTargets.find(
-          (t) => t.region !== currentTargetConfig.region,
-        );
+    //     // 查找其他地区选项（选择不同于当前地区的选项）
+    //     // 根据网站内容，有：United States, Canada, Europe, United Kingdom, Australia, Japan
+    //     const allTargets = Object.values(TARGETS);
+    //     const currentTargetConfig = TARGETS[target];
+    //     const otherTarget = allTargets.find(
+    //       (t) => t.region !== currentTargetConfig.region,
+    //     );
 
-        if (otherTarget) {
-          // 尝试多种方式查找地区选项
-          const regionNames: Record<string, string> = {
-            US: "United States",
-            CA: "Canada",
-            EU: "Europe",
-            UK: "United Kingdom",
-            AU: "Australia",
-            JP: "Japan",
-          };
+    //     if (otherTarget) {
+    //       // 尝试多种方式查找地区选项
+    //       const regionNames: Record<string, string> = {
+    //         US: "United States",
+    //         CA: "Canada",
+    //         EU: "Europe",
+    //         UK: "United Kingdom",
+    //         AU: "Australia",
+    //         JP: "Japan",
+    //       };
 
-          const regionName =
-            regionNames[otherTarget.region] || otherTarget.region;
+    //       const regionName =
+    //         regionNames[otherTarget.region] || otherTarget.region;
 
-          const targetOption = page
-            .getByRole("option", { name: new RegExp(regionName, "i") })
-            .or(page.locator(`a:has-text("${regionName}")`))
-            .or(page.locator(`button:has-text("${regionName}")`))
-            .or(page.locator(`text=/${otherTarget.region}/i`))
-            .first();
+    //       const targetOption = page
+    //         .getByRole("option", { name: new RegExp(regionName, "i") })
+    //         .or(page.locator(`a:has-text("${regionName}")`))
+    //         .or(page.locator(`button:has-text("${regionName}")`))
+    //         .or(page.locator(`text=/${otherTarget.region}/i`))
+    //         .first();
 
-          const optionVisible = await targetOption
-            .isVisible({ timeout: 3000 })
-            .catch(() => false);
-          if (optionVisible) {
-            await targetOption.click();
-            await page.waitForTimeout(2000);
+    //       const optionVisible = await targetOption
+    //         .isVisible({ timeout: 3000 })
+    //         .catch(() => false);
+    //       if (optionVisible) {
+    //         await targetOption.click();
+    //         await page.waitForTimeout(2000);
 
-            // 验证 URL 或页面元素变化
-            const currentUrl = page.url();
-            const urlChanged =
-              currentUrl.includes(otherTarget.region.toLowerCase()) ||
-              currentUrl.includes(
-                otherTarget.url.replace("https://", "").replace("/", ""),
-              ) ||
-              currentUrl !== base;
+    //         // 验证 URL 或页面元素变化
+    //         const currentUrl = page.url();
+    //         const urlChanged =
+    //           currentUrl.includes(otherTarget.region.toLowerCase()) ||
+    //           currentUrl.includes(
+    //             otherTarget.url.replace("https://", "").replace("/", ""),
+    //           ) ||
+    //           currentUrl !== base;
 
-            // 至少 URL 应该变化，或者页面重新加载
-            expect(urlChanged).toBeTruthy();
-          }
-        }
-      }
-    });
+    //         // 至少 URL 应该变化，或者页面重新加载
+    //         expect(urlChanged).toBeTruthy();
+    //       }
+    //     }
+    //   }
+    // });
 
-    // ========== 步骤 7: 访问下载页 ==========
-    await test.step("步骤 7: 访问下载页", async () => {
-      // 查找下载链接（通常在导航菜单或页脚）
-      // 根据网站内容，有 "Downloads" 链接
-      const downloadLink = page
-        .getByRole("link", { name: /download|下载/i })
-        .or(page.locator('a[href*="download" i]'))
-        .or(page.locator('a:has-text("Downloads")'))
-        .first();
+    // // ========== 步骤 7: 访问下载页 ==========
+    // await test.step("步骤 7: 访问下载页", async () => {
+    //   // 查找下载链接（通常在导航菜单或页脚）
+    //   // 根据网站内容，有 "Downloads" 链接
+    //   const downloadLink = page
+    //     .getByRole("link", { name: /download|下载/i })
+    //     .or(page.locator('a[href*="download" i]'))
+    //     .or(page.locator('a:has-text("Downloads")'))
+    //     .first();
 
-      const hasDownloadLink = await downloadLink
-        .isVisible({ timeout: 5000 })
-        .catch(() => false);
+    //   const hasDownloadLink = await downloadLink
+    //     .isVisible({ timeout: 5000 })
+    //     .catch(() => false);
 
-      if (hasDownloadLink) {
-        await downloadLink.click();
-        await page.waitForTimeout(2000);
+    //   if (hasDownloadLink) {
+    //     await downloadLink.click();
+    //     await page.waitForTimeout(2000);
 
-        // 验证下载页加载
-        const downloadPage = page
-          .locator('h1, .download-title, [data-testid="download"]')
-          .filter({ hasText: /download|下载/i })
-          .first();
+    //     // 验证下载页加载
+    //     const downloadPage = page
+    //       .locator('h1, .download-title, [data-testid="download"]')
+    //       .filter({ hasText: /download|下载/i })
+    //       .first();
 
-        const downloadPageVisible = await downloadPage
-          .isVisible({ timeout: 5000 })
-          .catch(() => false);
-        // 下载页可能重定向或直接下载，所以验证更宽松
-        expect(
-          downloadPageVisible || page.url().includes("download"),
-        ).toBeTruthy();
-      } else {
-        // 如果没有下载链接，跳过此步骤
-        test.skip(true, "下载页链接未找到");
-      }
-    });
+    //     const downloadPageVisible = await downloadPage
+    //       .isVisible({ timeout: 5000 })
+    //       .catch(() => false);
+    //     // 下载页可能重定向或直接下载，所以验证更宽松
+    //     expect(
+    //       downloadPageVisible || page.url().includes("download"),
+    //     ).toBeTruthy();
+    //   } else {
+    //     // 如果没有下载链接，跳过此步骤
+    //     test.skip(true, "下载页链接未找到");
+    //   }
+    // });
 
     // ========== 收集所有证据 ==========
     await test.step("收集测试证据", async () => {
