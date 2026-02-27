@@ -85,7 +85,7 @@ test.describe("P0_CART_TO_CHECKOUT - 购物车到结算", () => {
     await page
       .waitForURL(/\/checkout|\/cart\/checkout/i, { timeout: 15000 })
       .catch(() => {});
-
+    await page.waitForLoadState("domcontentloaded");
     // 验证结算页核心元素（至少有一个）
     const checkoutForm = page
       .locator('form, .checkout-form, [data-testid="checkout"]')
