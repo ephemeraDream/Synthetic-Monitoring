@@ -20,7 +20,7 @@ test.describe('P0_PDP_ADD_TO_CART - 商品加购', () => {
 
   test('进入商品详情页并添加到购物车', async ({ page }) => {
     // 方法1：从首页点击第一个商品
-    const firstProduct = page.locator('.product-card, .product-item, [data-testid*="product"]').first();
+    const firstProduct = page.locator('.link-cont').first();
     await expect(firstProduct).toBeVisible({ timeout: 10000 });
     await firstProduct.click();
 
@@ -35,7 +35,7 @@ test.describe('P0_PDP_ADD_TO_CART - 商品加购', () => {
     await expect(productTitle).toBeVisible({ timeout: 10000 });
 
     // 验证价格存在（但不依赖具体价格值）
-    const price = page.locator('.price, [data-testid*="price"], .product-price').first();
+    const price = page.locator('.product_infor_simplicity_right_buybox_price_info_discount').first();
     await expect(price).toBeVisible({ timeout: 5000 });
 
     // 查找并点击 "Add to Cart" 按钮
@@ -48,7 +48,7 @@ test.describe('P0_PDP_ADD_TO_CART - 商品加购', () => {
     await expect(addToCartButton).toBeEnabled({ timeout: 5000 });
 
     // 记录加购前的购物车状态（如果有显示）
-    const cartCountBefore = await page.locator('[data-testid*="cart-count"], .cart-count, .cart-badge')
+    const cartCountBefore = await page.locator('.cart-count-bubble [data-cart-count]')
       .first()
       .textContent()
       .catch(() => null);
@@ -64,12 +64,12 @@ test.describe('P0_PDP_ADD_TO_CART - 商品加购', () => {
     // 2. 出现成功提示
     // 3. 按钮状态变化
 
-    const cartCountAfter = await page.locator('[data-testid*="cart-count"], .cart-count, .cart-badge')
+    const cartCountAfter = await page.locator('.cart-count-bubble [data-cart-count]')
       .first()
       .textContent()
       .catch(() => null);
 
-    const successMessage = page.locator('text=/added to cart|已加入购物车|success/i').first();
+    const successMessage = page.locator('#halo-side-cart-preview').first();
     const hasSuccessMessage = await successMessage.isVisible({ timeout: 3000 }).catch(() => false);
 
     // 至少有一个成功指标

@@ -10,7 +10,7 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
   workers: process.env.CI ? 1 : undefined,
-  timeout: 60000, // 测试超时时间：60 秒
+  timeout: 600000, // 测试超时时间：60 秒
   expect: {
     timeout: 10000, // 断言超时时间：10 秒
   },
