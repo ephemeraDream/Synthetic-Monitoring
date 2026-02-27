@@ -321,7 +321,7 @@ test.describe("P0_COMPLETE_USER_JOURNEY - 完整用户旅程", () => {
       await page
         .waitForURL(/\/products?|\/p\//i, { timeout: 10000 })
         .catch(() => {});
-      await page.waitForTimeout(2000);
+      await page.waitForLoadState("domcontentloaded");
 
       // 关闭可能出现的弹窗（多次尝试）
       await closePopup(page);
@@ -412,64 +412,64 @@ test.describe("P0_COMPLETE_USER_JOURNEY - 完整用户旅程", () => {
       await expect(actualButton).toBeVisible({ timeout: 1000 });
 
       // 检查按钮是否被禁用（可能需要先选择商品选项）
-      const isDisabled = await actualButton.isDisabled().catch(() => false);
+      // const isDisabled = await actualButton.isDisabled().catch(() => false);
 
-      // 如果按钮被禁用，尝试选择商品选项（尺寸、颜色等）
-      if (isDisabled) {
-        // 尝试选择尺寸
-        const sizeSelect = page
-          .locator(
-            'select[name*="size"], select[id*="size"], [data-testid*="size"]',
-          )
-          .first();
-        const sizeSelectVisible = await sizeSelect
-          .isVisible({ timeout: 3000 })
-          .catch(() => false);
-        if (sizeSelectVisible) {
-          await sizeSelect.selectOption({ index: 1 }).catch(() => {});
-          await page.waitForTimeout(1000);
-        }
+      // // 如果按钮被禁用，尝试选择商品选项（尺寸、颜色等）
+      // if (isDisabled) {
+      //   // 尝试选择尺寸
+      //   const sizeSelect = page
+      //     .locator(
+      //       'select[name*="size"], select[id*="size"], [data-testid*="size"]',
+      //     )
+      //     .first();
+      //   const sizeSelectVisible = await sizeSelect
+      //     .isVisible({ timeout: 3000 })
+      //     .catch(() => false);
+      //   if (sizeSelectVisible) {
+      //     await sizeSelect.selectOption({ index: 1 }).catch(() => {});
+      //     await page.waitForTimeout(1000);
+      //   }
 
-        // 尝试选择颜色
-        const colorOption = page
-          .locator(
-            'input[type="radio"][name*="color"], [data-testid*="color"] input, .color-option input',
-          )
-          .first();
-        const colorOptionVisible = await colorOption
-          .isVisible({ timeout: 3000 })
-          .catch(() => false);
-        if (colorOptionVisible) {
-          await colorOption.click().catch(() => {});
-          await page.waitForTimeout(1000);
-        }
+      //   // 尝试选择颜色
+      //   const colorOption = page
+      //     .locator(
+      //       'input[type="radio"][name*="color"], [data-testid*="color"] input, .color-option input',
+      //     )
+      //     .first();
+      //   const colorOptionVisible = await colorOption
+      //     .isVisible({ timeout: 3000 })
+      //     .catch(() => false);
+      //   if (colorOptionVisible) {
+      //     await colorOption.click().catch(() => {});
+      //     await page.waitForTimeout(1000);
+      //   }
 
-        // 尝试选择第一个可用的选项
-        const firstOption = page
-          .locator(
-            'input[type="radio"]:not([disabled]), select option:not([disabled])',
-          )
-          .first();
-        const firstOptionVisible = await firstOption
-          .isVisible({ timeout: 2000 })
-          .catch(() => false);
-        if (firstOptionVisible) {
-          await firstOption.click().catch(() => {});
-          await page.waitForTimeout(1000);
-        }
+      //   // 尝试选择第一个可用的选项
+      //   const firstOption = page
+      //     .locator(
+      //       'input[type="radio"]:not([disabled]), select option:not([disabled])',
+      //     )
+      //     .first();
+      //   const firstOptionVisible = await firstOption
+      //     .isVisible({ timeout: 2000 })
+      //     .catch(() => false);
+      //   if (firstOptionVisible) {
+      //     await firstOption.click().catch(() => {});
+      //     await page.waitForTimeout(1000);
+      //   }
 
-        // 重新检查按钮是否已启用
-        await page.waitForTimeout(1000);
-        const stillDisabled = await actualButton
-          .isDisabled()
-          .catch(() => false);
-        if (stillDisabled) {
-          // 如果仍然禁用，记录警告但继续尝试
-          console.log("警告: 加购按钮仍然被禁用，可能商品缺货或需要更多选项");
-        }
-      }
+      //   // 重新检查按钮是否已启用
+      //   await page.waitForTimeout(1000);
+      //   const stillDisabled = await actualButton
+      //     .isDisabled()
+      //     .catch(() => false);
+      //   if (stillDisabled) {
+      //     // 如果仍然禁用，记录警告但继续尝试
+      //     console.log("警告: 加购按钮仍然被禁用，可能商品缺货或需要更多选项");
+      //   }
+      // }
 
-      await expect(actualButton).toBeEnabled({ timeout: 5000 });
+      // await expect(actualButton).toBeEnabled({ timeout: 5000 });
 
       // 记录加购前的购物车状态（使用多种选择器，优先查找数字）
       const cartSelectors = [

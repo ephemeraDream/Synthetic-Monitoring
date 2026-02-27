@@ -22,36 +22,79 @@ test.describe("P1_SEARCH - 搜索功能", () => {
   });
 
   for (const searchTerm of searchTerms) {
-    test(`搜索商品: ${searchTerm}`, async ({ page }) => {
-      const searchIcon = page.locator(".header__search").first();
-      await searchIcon.click();
-      // 查找搜索框
-      const searchInput = page
-        .getByRole("searchbox")
-        .or(page.getByPlaceholder(/search|搜索/i))
-        .or(page.locator('input[type="search"]'))
-        .or(page.locator('[data-testid*="search"]'))
-        .first();
+    test(`搜索商品: ${searchTerm}`, async ({ page, isMobile }) => {
+      if (isMobile) {
+        const searchIcon = page
+          .locator(".header-mobile__item--search .header__search .header__icon")
+          .first();
 
-      await expect(searchInput).toBeVisible({ timeout: 10000 });
+        const searchForm = page.locator("#search-form-mobile");
 
-      // 输入搜索关键词
-      await searchInput.fill(searchTerm);
-      await page.waitForTimeout(500);
+        await searchIcon.click();
 
-      // 提交搜索（按 Enter 或点击搜索按钮）
-      await searchInput.press("Enter");
+        try {
+          await expect(searchForm).toBeVisible({ timeout: 3000 });
+        } catch {
+          // 如果没弹出，再点一次
+          await searchIcon.click();
+          await expect(searchForm).toBeVisible();
+        }
 
-      // 或者点击搜索按钮
-      const searchButton = page
-        .getByRole("button", { name: /search|搜索/i })
-        .or(page.locator('button[type="submit"]'))
-        .first();
-      const hasSearchButton = await searchButton
-        .isVisible({ timeout: 2000 })
-        .catch(() => false);
-      if (hasSearchButton) {
-        await searchButton.click();
+        // 查找搜索框
+        const searchInput = page.locator("#Search-In-Modal-Sidebar").first();
+
+        await expect(searchInput).toBeVisible({ timeout: 10000 });
+
+        // 输入搜索关键词
+        await searchInput.fill(searchTerm);
+        await page.waitForTimeout(500);
+
+        // 提交搜索（按 Enter 或点击搜索按钮）
+        await searchInput.press("Enter");
+
+        // 或者点击搜索按钮
+        const searchButton = page
+          .getByRole("button", { name: /search|搜索/i })
+          .or(page.locator('button[type="submit"]'))
+          .first();
+        const hasSearchButton = await searchButton
+          .isVisible({ timeout: 2000 })
+          .catch(() => false);
+        if (hasSearchButton) {
+          await searchButton.click();
+        }
+      } else {
+        const searchIcon = page.locator(".header__search").first();
+        await searchIcon.click({ timeout: 10000 });
+
+        // 查找搜索框
+        const searchInput = page
+          .getByRole("searchbox")
+          .or(page.getByPlaceholder(/search|搜索/i))
+          .or(page.locator('input[type="search"]'))
+          .or(page.locator('[data-testid*="search"]'))
+          .first();
+
+        await expect(searchInput).toBeVisible({ timeout: 10000 });
+
+        // 输入搜索关键词
+        await searchInput.fill(searchTerm);
+        await page.waitForTimeout(500);
+
+        // 提交搜索（按 Enter 或点击搜索按钮）
+        await searchInput.press("Enter");
+
+        // 或者点击搜索按钮
+        const searchButton = page
+          .getByRole("button", { name: /search|搜索/i })
+          .or(page.locator('button[type="submit"]'))
+          .first();
+        const hasSearchButton = await searchButton
+          .isVisible({ timeout: 2000 })
+          .catch(() => false);
+        if (hasSearchButton) {
+          await searchButton.click();
+        }
       }
 
       // 等待搜索结果页加载

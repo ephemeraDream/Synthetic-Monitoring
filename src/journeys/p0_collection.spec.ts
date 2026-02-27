@@ -22,18 +22,45 @@ test.describe("P0_COLLECTION - 分类页列表", () => {
   });
 
   for (const collection of collections) {
-    test(`分类页加载: ${collection}`, async ({ page }) => {
-      await page
-        .locator('.menu-lv-item .header__menu-item .text:has-text("Products")')
-        .hover({ timeout: 10000 });
-      // 查找分类链接（优先使用文本匹配）
-      const collectionLink = page
-        .locator(`a.nav-menu-items:has-text("${collection}")`)
-        .first();
+    test(`分类页加载: ${collection}`, async ({ page, isMobile }) => {
+      if (isMobile) {
+        await page
+          .locator(".header-mobile__item--menu .mobileMenu-toggle")
+          .click({ timeout: 10000 });
 
-      // 点击分类
-      await expect(collectionLink).toBeVisible({ timeout: 10000 });
-      await collectionLink.click();
+        // 查找分类链接（优先使用文本匹配）
+        const collectionLinkMb = page
+          .locator(`#navigation-mobile a.menu_text:has-text("${collection}")`)
+          .first();
+
+        // 点击分类
+        await expect(collectionLinkMb).toBeVisible({ timeout: 10000 });
+        await collectionLinkMb.click();
+
+        // 点击分类
+        await expect(
+          page.locator(`#navigation-mobile .all-chairs-line`).first(),
+        ).toBeVisible({ timeout: 10000 });
+        await page
+          .locator(`#navigation-mobile .all-chairs-line`)
+          .first()
+          .click();
+      } else {
+        await page
+          .locator(
+            '.menu-lv-item .header__menu-item .text:has-text("Products")',
+          )
+          .hover({ timeout: 10000 });
+
+        // 查找分类链接（优先使用文本匹配）
+        const collectionLink = page
+          .locator(`a.nav-menu-items:has-text("${collection}")`)
+          .first();
+
+        // 点击分类
+        await expect(collectionLink).toBeVisible({ timeout: 10000 });
+        await collectionLink.click();
+      }
 
       // 等待 URL 变化（分类页通常有路径变化）
       await page
