@@ -39,10 +39,16 @@ test.describe("P0_COLLECTION - 分类页列表", () => {
 
         // 点击分类
         await expect(
-          page.locator(`#navigation-mobile .all-chairs-line`).first(),
+          page
+            .locator(
+              `#navigation-mobile .all-chairs-line[data-url*="${collection}" i]`,
+            )
+            .first(),
         ).toBeVisible({ timeout: 10000 });
         await page
-          .locator(`#navigation-mobile .all-chairs-line`)
+          .locator(
+            `#navigation-mobile .all-chairs-line[data-url*="${collection}" i]`,
+          )
           .first()
           .click();
       } else {
