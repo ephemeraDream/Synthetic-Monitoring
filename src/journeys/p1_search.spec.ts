@@ -12,7 +12,7 @@ test.describe("P1_SEARCH - 搜索功能", () => {
   const target = getCurrentTarget();
 
   // 测试的搜索关键词
-  const searchTerms = ["Athena Pro", "Atlas"];
+  const searchTerms = ["Athena Pro", "Desk"];
 
   test.beforeEach(async ({ page }) => {
     await injectVitalsScript(page);
