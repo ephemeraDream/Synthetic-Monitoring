@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { getCurrentTarget } from "../config/targets";
-import { closePopup } from "../utils/popup";
+import { closePopup, waitAndClosePopup } from "../utils/popup";
 import { attachNetworkSummary } from "../utils/network";
 import { injectVitalsScript } from "../utils/vitals";
 import { waitRandom } from "../utils/random";
@@ -12,13 +12,13 @@ test.describe("P1_SEARCH - 搜索功能", () => {
   const target = getCurrentTarget();
 
   // 测试的搜索关键词
-  const searchTerms = ["Athena", "Atlas"];
+  const searchTerms = ["Athena Pro", "Atlas"];
 
   test.beforeEach(async ({ page }) => {
     await injectVitalsScript(page);
-    await waitRandom(3000);
-    await page.goto(target.url, { waitUntil: "domcontentloaded" });
-    await closePopup(page);
+
+    await page.goto(target.url, { waitUntil: "load" });
+    await waitAndClosePopup(page);
   });
 
   for (const searchTerm of searchTerms) {
@@ -134,11 +134,10 @@ test.describe("P1_SEARCH - 搜索功能", () => {
       await page
         .waitForURL(/\/products?|\/p\//i, { timeout: 10000 })
         .catch(() => {});
-      await closePopup(page);
 
       // 验证商品详情页
       const productTitle = page
-        .locator('h1, .product-title, [data-testid="product-title"]')
+        .locator(".product_info_new_product_title")
         .first();
       await expect(productTitle).toBeVisible({ timeout: 10000 });
 

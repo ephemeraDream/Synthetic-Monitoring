@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { getCurrentTarget } from "../config/targets";
-import { closePopup } from "../utils/popup";
+import { closePopup, waitAndClosePopup } from "../utils/popup";
 import { attachNetworkSummary } from "../utils/network";
 import { injectVitalsScript } from "../utils/vitals";
 import { waitRandom } from "../utils/random";
@@ -13,9 +13,9 @@ test.describe("P0_CART_TO_CHECKOUT - 购物车到结算", () => {
 
   test.beforeEach(async ({ page }) => {
     await injectVitalsScript(page);
-    await waitRandom(3000);
-    await page.goto(target.url, { waitUntil: "domcontentloaded" });
-    await closePopup(page);
+
+    await page.goto(target.url, { waitUntil: "load" });
+    await waitAndClosePopup(page);
   });
 
   test("购物车到结算流程", async ({ page }) => {
@@ -30,31 +30,87 @@ test.describe("P0_CART_TO_CHECKOUT - 购物车到结算", () => {
       .waitForURL(/\/products?|\/p\//i, { timeout: 10000 })
       .catch(() => {});
     await page.waitForLoadState("domcontentloaded");
-    await closePopup(page);
 
+    // 1️⃣ 找加购按钮（更简洁）
     const addToCartButton = page
-      .getByRole("button", { name: /add to cart|加入购物车/i })
-      .or(page.locator('button:has-text("Add to Cart")'))
+      .getByRole("button", {
+        name: /add to cart|加入购物车|buy now|立即购买/i,
+      })
       .first();
 
     await expect(addToCartButton).toBeVisible({ timeout: 10000 });
-    await addToCartButton.click();
-    await page.waitForTimeout(2000);
 
-    // 步骤2：打开购物车
-    await expect(page.locator("#halo-side-cart-preview")).toBeVisible({
-      timeout: 5000,
-    });
-    const viewCartButton = page
-      .locator('a.button-view-cart:has-text("View Cart")')
-      .or(page.locator('a.button-view-cart[href^="/cart"]'))
+    // 2️⃣ 记录购物车数量（如果存在）
+    const cartCountLocator = page
+      .locator("[data-cart-count], .cart-count-bubble, .cart-badge")
       .first();
-    await viewCartButton.click({ timeout: 5000 });
+
+    const cartCountBefore = await cartCountLocator
+      .textContent()
+      .catch(() => null);
+
+    const currentUrl = page.url();
+
+    // 3️⃣ 点击 + 同时监听可能的跳转
+    await Promise.all([
+      page.waitForLoadState("networkidle").catch(() => {}),
+      addToCartButton.click(),
+    ]);
+
+    // 4️⃣ 成功判断方式一：跳转到 /cart
+    if (page.url().includes("/cart")) {
+      await expect(
+        page
+          .locator(".cart-item, .line-item, [data-testid*='cart-item']")
+          .first(),
+      ).toBeVisible({ timeout: 5000 });
+      return;
+    }
+
+    // 5️⃣ 成功判断方式二：购物车数量变化
+    let cartChanged = false;
+
+    if (cartCountBefore) {
+      await expect(cartCountLocator)
+        .not.toHaveText(cartCountBefore, {
+          timeout: 5000,
+        })
+        .then(() => {
+          cartChanged = true;
+        })
+        .catch(() => {});
+    }
+
+    // 6️⃣ 成功判断方式三：cart drawer 出现
+    const cartDrawerVisible = await page
+      .locator("#halo-side-cart-preview")
+      .first()
+      .isVisible()
+      .catch(() => false);
+
+    const success = cartChanged || cartDrawerVisible;
+
+    if (!success) {
+      console.log("加购验证失败", {
+        before: cartCountBefore,
+        after: await cartCountLocator.textContent().catch(() => null),
+        url: page.url(),
+      });
+    }
+
+    expect(success).toBeTruthy();
 
     // 等待购物车页面加载
+    if (page.url().includes("/cart") == false) {
+      const viewCartButton = page
+        .locator('a.button-view-cart:has-text("View Cart")')
+        .or(page.locator('a.button-view-cart[href^="/cart"]'))
+        .first();
+      await viewCartButton.click({ timeout: 5000 });
+    }
+    // 等待购物车页面加载
     await page.waitForURL(/\/cart/i, { timeout: 10000 }).catch(() => {});
-    await closePopup(page);
-
+    
     // 验证购物车页面元素
     const cartTitle = page
       .locator('h1, .cart-title, [data-testid="cart-title"]')

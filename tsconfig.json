@@ -2,9 +2,15 @@
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",
-    "lib": ["ES2022"],
+    "lib": [
+      "ES2022",
+      "DOM"
+    ],
     "moduleResolution": "node",
-    "types": ["node", "@playwright/test"],
+    "types": [
+      "node",
+      "@playwright/test"
+    ],
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -14,10 +20,17 @@
     "rootDir": "./",
     "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": [
+        "src/*"
+      ]
     }
   },
-  "include": ["src/**/*", "playwright.config.ts"],
-  "exclude": ["node_modules", "dist"]
+  "include": [
+    "src/**/*",
+    "playwright.config.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
 }
-

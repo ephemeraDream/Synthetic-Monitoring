@@ -1,6 +1,10 @@
 import { test, expect } from "@playwright/test";
 import { TARGETS, TargetKey } from "../config/targets";
-import { closeMarketingPopups, closePopup } from "../utils/popup";
+import {
+  closeMarketingPopups,
+  closePopup,
+  waitAndClosePopup,
+} from "../utils/popup";
 import { attachNetworkCollectors } from "../utils/network";
 import { attachHAR } from "../utils/har";
 import { installWebVitalsCollector, readWebVitals } from "../utils/vitals";
@@ -31,10 +35,7 @@ import { VITALS_THRESHOLDS } from "../config/vitals_thresholds";
  * 优先级：P0（核心用户旅程）
  */
 test.describe("P0_COMPLETE_USER_JOURNEY - 完整用户旅程", () => {
-  test("完整用户操作流程", async ({ page }, testInfo) => {
-    // 设置测试超时时间
-    test.setTimeout(600000); // 3 分钟，完整流程需要更多时间
-
+  test("完整用户操作流程", async ({ page, isMobile }, testInfo) => {
     // ========== 初始化 ==========
     const target: TargetKey = (process.env.TARGET as TargetKey) || "US";
     const base = TARGETS[target].url;
@@ -76,17 +77,8 @@ test.describe("P0_COMPLETE_USER_JOURNEY - 完整用户旅程", () => {
 
     // ========== 步骤 1: 打开首页 ==========
     await test.step("步骤 1: 打开首页并验证", async () => {
-      await page.goto(base, { waitUntil: "domcontentloaded" });
-
-      // 关闭营销弹窗（"Get $30 off..." 等）
-      // 多次尝试确保关闭
-      await closeMarketingPopups(page);
-      await page.waitForTimeout(1000);
-      await closeMarketingPopups(page); // 再次尝试
-
-      // 等待页面稳定
-      await page.waitForLoadState("domcontentloaded", { timeout: 15000 });
-      // await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+      await page.goto(base, { waitUntil: "load" });
+      await waitAndClosePopup(page);
 
       // 验证首页核心元素
       // Logo/品牌标识（使用更灵活的验证策略）
@@ -166,156 +158,119 @@ test.describe("P0_COMPLETE_USER_JOURNEY - 完整用户旅程", () => {
       }
 
       // 验证首屏内容（避免白屏）
-      const mainContent = page
-        .locator("main, .hero, section, .main-content, body > *")
-        .first();
-      const hasContent = await mainContent
-        .isVisible({ timeout: 5000 })
-        .catch(() => false);
-
-      if (!hasContent) {
-        const bodyHasContent = await page.evaluate(() => {
-          // @ts-ignore - document 在浏览器上下文中可用
-          return document.body && document.body.children.length > 0;
-        });
-        expect(bodyHasContent).toBeTruthy();
-      } else {
-        expect(hasContent).toBeTruthy();
-      }
+      await expect(page.locator("main, #MainContent")).toBeVisible({
+        timeout: 10000,
+      });
     });
 
     // ========== 步骤 2: 搜索商品 ==========
     await test.step("步骤 2: 搜索商品并进入详情页", async () => {
-      // 查找搜索按钮或搜索框
-      // 根据网站内容，搜索可能在 header 中，需要点击打开搜索模态框
-      const searchButton = page
-        .getByRole("button", { name: /search/i })
-        .or(page.locator('button[aria-label*="search" i]'))
-        .or(page.locator('a[href*="search"], .search-icon'))
-        .or(page.locator('summary:has-text("Search")'))
-        .first();
+      if (isMobile) {
+        const searchIcon = page
+          .locator(".header-mobile__item--search .header__search .header__icon")
+          .first();
 
-      const searchButtonVisible = await searchButton
-        .isVisible({ timeout: 3000 })
-        .catch(() => false);
+        const searchForm = page.locator("#search-form-mobile");
 
-      if (searchButtonVisible) {
-        // 点击搜索按钮打开搜索框/模态框
-        await searchButton.click();
-        await page.waitForTimeout(1000); // 等待搜索模态框打开
+        await searchIcon.click();
+
+        try {
+          await expect(searchForm).toBeVisible({ timeout: 3000 });
+        } catch {
+          // 如果没弹出，再点一次
+          await searchIcon.click();
+          await expect(searchForm).toBeVisible();
+        }
+
+        // 查找搜索框
+        const searchInput = page.locator("#Search-In-Modal-Sidebar").first();
+
+        await expect(searchInput).toBeVisible({ timeout: 10000 });
+
+        // 输入搜索关键词
+        await searchInput.fill("Athena Pro");
+        await page.waitForTimeout(500);
+
+        // 提交搜索（按 Enter 或点击搜索按钮）
+        await searchInput.press("Enter");
+
+        // 或者点击搜索按钮
+        const searchButton = page
+          .getByRole("button", { name: /search|搜索/i })
+          .or(page.locator('button[type="submit"]'))
+          .first();
+        const hasSearchButton = await searchButton
+          .isVisible({ timeout: 2000 })
+          .catch(() => false);
+        if (hasSearchButton) {
+          await searchButton.click();
+        }
+      } else {
+        const searchIcon = page.locator(".header__search").first();
+        await searchIcon.click({ timeout: 10000 });
+
+        // 查找搜索框
+        const searchInput = page
+          .getByRole("searchbox")
+          .or(page.getByPlaceholder(/search|搜索/i))
+          .or(page.locator('input[type="search"]'))
+          .or(page.locator('[data-testid*="search"]'))
+          .first();
+
+        await expect(searchInput).toBeVisible({ timeout: 10000 });
+
+        // 输入搜索关键词
+        await searchInput.fill("Athena Pro");
+        await page.waitForTimeout(500);
+
+        // 提交搜索（按 Enter 或点击搜索按钮）
+        await searchInput.press("Enter");
+
+        // 或者点击搜索按钮
+        const searchButton = page
+          .getByRole("button", { name: /search|搜索/i })
+          .or(page.locator('button[type="submit"]'))
+          .first();
+        const hasSearchButton = await searchButton
+          .isVisible({ timeout: 2000 })
+          .catch(() => false);
+        if (hasSearchButton) {
+          await searchButton.click();
+        }
       }
 
-      // 查找搜索输入框（可能在模态框中）
-      const searchInput = page
-        .getByRole("searchbox")
-        .or(page.locator('input[type="search"]'))
-        .or(page.locator('input[placeholder*="search" i]'))
-        .or(page.locator('input[name*="search" i]'))
-        .or(page.locator('input[name="q"]')) // 根据网站内容，搜索框 name="q"
-        .first();
+      // 等待搜索结果页加载
+      await page
+        .waitForURL(/\/search|\/results?/i, { timeout: 10000 })
+        .catch(() => {});
 
-      // 使用更宽松的验证：搜索框可能暂时隐藏，等待它出现
-      const searchInputVisible = await searchInput
+      // 验证搜索结果出现
+      const resultsContainer = page
+        .locator('.search-results, .results, [data-testid="search-results"]')
+        .first();
+      const hasResultsContainer = await resultsContainer
         .isVisible({ timeout: 5000 })
         .catch(() => false);
 
-      if (!searchInputVisible) {
-        // 如果搜索框不可见，尝试再次点击搜索按钮
-        if (searchButtonVisible) {
-          await searchButton.click();
-          await page.waitForTimeout(1000);
-        }
-        // 再次尝试查找
-        const retryVisible = await searchInput
-          .isVisible({ timeout: 3000 })
-          .catch(() => false);
-        if (!retryVisible) {
-          // 如果还是找不到，尝试直接导航到搜索结果页
-          // 某些网站支持直接通过 URL 搜索
-          await page.goto(`${base}search?q=Athena`, {
-            waitUntil: "domcontentloaded",
-          });
-          await page.waitForTimeout(2000);
-        } else {
-          await expect(searchInput).toBeVisible({ timeout: 1000 });
-        }
-      } else {
-        await expect(searchInput).toBeVisible({ timeout: 1000 });
-      }
-
-      // 搜索 "Athena"（根据网站内容，这是热门商品）
-      // 网站显示有 "Athena Pro Chairs"、"Athena Chairs" 等
-      const searchInputFinal = page
-        .locator('input[type="search"], input[name="q"]')
-        .first();
-      const isInputVisible = await searchInputFinal
-        .isVisible({ timeout: 3000 })
-        .catch(() => false);
-
-      if (isInputVisible) {
-        await searchInputFinal.fill("Athena Pro");
-        await page.waitForTimeout(1000); // 等待搜索建议/结果加载
-        await searchInputFinal.press("Enter");
-
-        // 等待搜索结果
-        await page
-          .waitForURL(/\/search|\/results?/i, { timeout: 10000 })
-          .catch(() => {});
-        await page.waitForTimeout(2000); // 等待结果加载
-      } else {
-        // 如果搜索框不可用，直接导航到搜索结果页
-        await page.goto(`${base}search?q=athena+pro`, {
-          waitUntil: "domcontentloaded",
-        });
-        await page.waitForTimeout(2000);
-      }
-
-      // 验证搜索结果出现
-      // 使用多种选择器查找商品卡片（排除导航菜单中的链接）
-      // 注意：导航菜单中也有 "Athena" 链接，需要排除
-      const searchResults = page
+      // 验证至少有一个结果项
+      const resultItem = page
         .locator(
-          'main .product-card, main .search-result-item, main [data-testid*="product"], main .product-item, main a[href*="/products/"]',
+          '.product-card, .search-result-item, [data-testid*="product"], .product_categories_product',
         )
-        .or(page.locator('.search-results a[href*="/products/"]'))
-        .or(page.locator('.predictive-search-results a[href*="/products/"]'))
         .first();
+      await expect(resultItem).toBeVisible({ timeout: 10000 });
 
-      const resultsVisible = await searchResults
-        .isVisible({ timeout: 10000 })
-        .catch(() => false);
+      // 验证搜索关键词在结果中（标题或描述）
+      const resultWithKeyword = page
+        .locator(
+          ".product-title, .result-title, h2, h3, .product_categories_product_title",
+        )
+        .filter({ hasText: new RegExp("Athena Pro", "i") })
+        .first();
+      await expect(resultWithKeyword).toBeVisible({ timeout: 10000 });
 
-      if (!resultsVisible) {
-        // 如果搜索结果不可见，尝试查找搜索结果区域中的链接（排除导航菜单）
-        const athenaLink = page
-          .locator('main a[href*="/products/"]')
-          .filter({ hasText: /Athena/i })
-          .first();
-
-        const linkVisible = await athenaLink
-          .isVisible({ timeout: 5000 })
-          .catch(() => false);
-
-        if (linkVisible) {
-          // 滚动到链接位置，避免被其他元素遮挡
-          await athenaLink.scrollIntoViewIfNeeded();
-          await page.waitForTimeout(500);
-          // 使用 force 点击，避免被遮挡
-          await athenaLink.click({ force: true });
-        } else {
-          // 如果还是找不到，直接导航到商品详情页
-          await page.goto(`${base}products/blacklyte-athena-pro-gaming-chair`, {
-            waitUntil: "domcontentloaded",
-          });
-        }
-      } else {
-        // 点击第一个搜索结果进入详情页
-        // 滚动到元素位置，避免被遮挡
-        await searchResults.scrollIntoViewIfNeeded();
-        await page.waitForTimeout(500);
-        // 使用 force 点击，避免被其他元素拦截
-        await searchResults.click({ force: true });
-      }
+      // 点击第一个搜索结果进入 PDP
+      await resultItem.click();
 
       // 等待进入商品详情页
       await page
@@ -323,460 +278,87 @@ test.describe("P0_COMPLETE_USER_JOURNEY - 完整用户旅程", () => {
         .catch(() => {});
       await page.waitForLoadState("domcontentloaded");
 
-      // 关闭可能出现的弹窗（多次尝试）
-      await closePopup(page);
-      await page.waitForTimeout(1000);
-      await closePopup(page); // 再次尝试
-
-      // 验证商品详情页（使用更宽松的验证）
+      // 验证商品详情页
       const productTitle = page
-        .locator(
-          'h1, .product-title, [data-testid="product-title"], .productView-title',
-        )
+        .locator('h1, .product-title, [data-testid="product-title"]')
         .first();
-      const titleVisible = await productTitle
-        .isVisible({ timeout: 5000 })
-        .catch(() => false);
+      await expect(productTitle).toBeVisible({ timeout: 10000 });
 
-      if (!titleVisible) {
-        // 如果标题不可见，验证元素至少存在于 DOM 中
-        const titleExists = (await productTitle.count()) > 0;
-        expect(titleExists).toBeTruthy();
-
-        // 验证 URL 包含 products（说明已进入商品页）
-        const currentUrl = page.url();
-        expect(currentUrl).toMatch(/\/products?|\/p\//i);
-      } else {
-        await expect(productTitle).toBeVisible({ timeout: 1000 });
-      }
-
-      // 验证标题包含 "Athena"（如果标题存在）
-      if ((await productTitle.count()) > 0) {
-        const titleText = await productTitle.textContent();
-        expect(titleText?.toLowerCase()).toContain("athena");
-      }
+      // 验证标题包含搜索关键词（可选，因为可能有变体）
+      const titleText = await productTitle.textContent();
+      expect(titleText?.toLowerCase()).toContain("Athena Pro".toLowerCase());
     });
 
     // ========== 步骤 3: 加购 ==========
     await test.step("步骤 3: 添加商品到购物车", async () => {
-      // 查找加购按钮（使用多种选择器）
-      // 根据网站内容，按钮可能是 "Buy Now"、"Add to Cart" 等
+      // 1️⃣ 找加购按钮（更简洁）
       const addToCartButton = page
         .getByRole("button", {
           name: /add to cart|加入购物车|buy now|立即购买/i,
         })
-        .or(page.locator('button:has-text("Add to Cart")'))
-        .or(page.locator('button:has-text("Buy Now")'))
-        .or(page.locator('button:has-text("Buy")'))
-        .or(page.locator('[data-testid*="add-to-cart"]'))
-        .or(page.locator('[name*="add"]'))
-        .or(page.locator('form[action*="cart"] button[type="submit"]'))
         .first();
 
-      const buttonVisible = await addToCartButton
-        .isVisible({ timeout: 10000 })
-        .catch(() => false);
+      await expect(addToCartButton).toBeVisible({ timeout: 10000 });
 
-      let actualButton = addToCartButton;
-
-      if (!buttonVisible) {
-        // 如果找不到按钮，尝试查找表单提交按钮
-        const formButton = page
-          .locator('form[action*="cart"] button, form[action*="add"] button')
-          .first();
-        const formButtonVisible = await formButton
-          .isVisible({ timeout: 5000 })
-          .catch(() => false);
-
-        if (formButtonVisible) {
-          actualButton = formButton;
-        } else {
-          // 如果还是找不到，尝试查找任何包含 "Buy" 或 "Add" 的按钮
-          const buyButton = page
-            .locator('button:has-text("Buy"), button:has-text("Add")')
-            .first();
-          const buyButtonVisible = await buyButton
-            .isVisible({ timeout: 3000 })
-            .catch(() => false);
-
-          if (buyButtonVisible) {
-            actualButton = buyButton;
-          } else {
-            // 如果还是找不到，跳过加购步骤（可能是商品缺货或其他原因）
-            test.skip(true, "加购按钮未找到，可能商品缺货或页面结构不同");
-            return;
-          }
-        }
-      }
-
-      await expect(actualButton).toBeVisible({ timeout: 1000 });
-
-      // 检查按钮是否被禁用（可能需要先选择商品选项）
-      // const isDisabled = await actualButton.isDisabled().catch(() => false);
-
-      // // 如果按钮被禁用，尝试选择商品选项（尺寸、颜色等）
-      // if (isDisabled) {
-      //   // 尝试选择尺寸
-      //   const sizeSelect = page
-      //     .locator(
-      //       'select[name*="size"], select[id*="size"], [data-testid*="size"]',
-      //     )
-      //     .first();
-      //   const sizeSelectVisible = await sizeSelect
-      //     .isVisible({ timeout: 3000 })
-      //     .catch(() => false);
-      //   if (sizeSelectVisible) {
-      //     await sizeSelect.selectOption({ index: 1 }).catch(() => {});
-      //     await page.waitForTimeout(1000);
-      //   }
-
-      //   // 尝试选择颜色
-      //   const colorOption = page
-      //     .locator(
-      //       'input[type="radio"][name*="color"], [data-testid*="color"] input, .color-option input',
-      //     )
-      //     .first();
-      //   const colorOptionVisible = await colorOption
-      //     .isVisible({ timeout: 3000 })
-      //     .catch(() => false);
-      //   if (colorOptionVisible) {
-      //     await colorOption.click().catch(() => {});
-      //     await page.waitForTimeout(1000);
-      //   }
-
-      //   // 尝试选择第一个可用的选项
-      //   const firstOption = page
-      //     .locator(
-      //       'input[type="radio"]:not([disabled]), select option:not([disabled])',
-      //     )
-      //     .first();
-      //   const firstOptionVisible = await firstOption
-      //     .isVisible({ timeout: 2000 })
-      //     .catch(() => false);
-      //   if (firstOptionVisible) {
-      //     await firstOption.click().catch(() => {});
-      //     await page.waitForTimeout(1000);
-      //   }
-
-      //   // 重新检查按钮是否已启用
-      //   await page.waitForTimeout(1000);
-      //   const stillDisabled = await actualButton
-      //     .isDisabled()
-      //     .catch(() => false);
-      //   if (stillDisabled) {
-      //     // 如果仍然禁用，记录警告但继续尝试
-      //     console.log("警告: 加购按钮仍然被禁用，可能商品缺货或需要更多选项");
-      //   }
-      // }
-
-      // await expect(actualButton).toBeEnabled({ timeout: 5000 });
-
-      // 记录加购前的购物车状态（使用多种选择器，优先查找数字）
-      const cartSelectors = [
-        '[data-testid*="cart-count"]',
-        ".cart-count",
-        ".cart-badge",
-        'a[href*="cart" i] span:has-text(/\\d/)',
-        ".header-cart .count",
-        ".cart-icon .badge",
-        '[aria-label*="cart" i] span',
-      ];
-
-      let cartCountBefore: string | null = null;
-      let cartElementBefore: any = null;
-
-      // 首先尝试查找包含数字的购物车元素
-      for (const selector of cartSelectors) {
-        const element = page.locator(selector).first();
-        const text = await element.textContent().catch(() => null);
-        if (text && text.trim() && /\d/.test(text)) {
-          cartCountBefore = text.trim();
-          cartElementBefore = element;
-          break;
-        }
-      }
-
-      // 如果没找到数字，记录购物车链接的文本（用于后续比较）
-      if (!cartCountBefore) {
-        const cartLink = page.locator('a[href*="cart" i]').first();
-        const cartLinkText = await cartLink.textContent().catch(() => null);
-        if (cartLinkText) {
-          cartCountBefore = cartLinkText.trim();
-        }
-      }
-
-      // 记录当前URL（以防页面跳转）
-      const currentUrlBeforeClick = page.url();
-
-      // 点击加购按钮
-      await actualButton.click();
-
-      // 等待加购操作完成（等待网络请求、DOM更新等）
-      await page.waitForTimeout(5000);
-
-      // 处理可能的页面跳转（如跳转到购物车页面）
-      const urlAfterClick = page.url();
-      const hasRedirected = urlAfterClick !== currentUrlBeforeClick;
-
-      // 如果跳转到购物车页面，说明加购成功
-      if (hasRedirected && urlAfterClick.includes("/cart")) {
-        // 验证购物车中有商品
-        const cartItem = page
-          .locator(
-            '.cart-item, [data-testid*="cart-item"], .line-item, tbody tr',
-          )
-          .first();
-        const hasItem = await cartItem
-          .isVisible({ timeout: 5000 })
-          .catch(() => false);
-        if (hasItem) {
-          // 加购成功，直接返回（后续步骤会继续处理购物车）
-          return;
-        }
-      }
-
-      // 如果没有跳转，等待页面稳定
-      if (!hasRedirected) {
-        await page
-          .waitForLoadState("networkidle", { timeout: 5000 })
-          .catch(() => {});
-        await page.waitForTimeout(2000);
-      }
-
-      // 关闭可能出现的弹窗（如"已添加到购物车"弹窗）
-      await closePopup(page);
-
-      // 如果页面跳转了但不是购物车页面，返回原页面
-      if (hasRedirected && !urlAfterClick.includes("/cart")) {
-        await page
-          .goto(currentUrlBeforeClick, { waitUntil: "domcontentloaded" })
-          .catch(() => {});
-        await page.waitForTimeout(2000);
-      }
-
-      // 验证加购成功的多种方式
-      // 方式1: 检查购物车数量变化（包括文本变化和数字变化）
-      let cartCountAfter: string | null = null;
-      let cartElementAfter: any = null;
-
-      // 等待购物车元素可能重新渲染
-      await page.waitForTimeout(1000);
-
-      // 首先尝试查找包含数字的购物车元素
-      for (const selector of cartSelectors) {
-        const element = page.locator(selector).first();
-        const text = await element
-          .textContent({ timeout: 3000 })
-          .catch(() => null);
-        if (text && text.trim() && /\d/.test(text)) {
-          cartCountAfter = text.trim();
-          cartElementAfter = element;
-          break;
-        }
-      }
-
-      // 如果没找到数字，检查购物车链接的文本
-      if (!cartCountAfter) {
-        const cartLink = page.locator('a[href*="cart" i]').first();
-        const cartLinkText = await cartLink
-          .textContent({ timeout: 3000 })
-          .catch(() => null);
-        if (cartLinkText) {
-          cartCountAfter = cartLinkText.trim();
-        }
-      }
-
-      // 检查购物车状态是否变化
-      // 1. 如果之前没有数字，现在有数字，说明加购成功
-      const hasNumberNow = cartCountAfter && /\d/.test(cartCountAfter);
-      const hadNumberBefore = cartCountBefore && /\d/.test(cartCountBefore);
-      const numberAppeared = !hadNumberBefore && hasNumberNow;
-
-      // 2. 如果之前有数字，现在数字增加了（例如从 "00 items" 变为 "01 items"）
-      let numberIncreased = false;
-      if (
-        hadNumberBefore &&
-        hasNumberNow &&
-        cartCountBefore &&
-        cartCountAfter
-      ) {
-        const beforeMatch = cartCountBefore.match(/\d+/);
-        const afterMatch = cartCountAfter.match(/\d+/);
-        if (beforeMatch && afterMatch) {
-          const beforeNum = parseInt(beforeMatch[0]);
-          const afterNum = parseInt(afterMatch[0]);
-          numberIncreased = afterNum > beforeNum;
-        }
-      }
-
-      // 3. 如果文本内容发生变化（即使没有数字）
-      const textChanged =
-        cartCountBefore !== cartCountAfter && cartCountAfter !== null;
-
-      const cartChanged = numberAppeared || numberIncreased || textChanged;
-
-      // 方式2: 检查成功消息（包括弹窗、toast、页面提示等）
-      const successSelectors = [
-        "text=/added to cart|已加入购物车|success|成功/i",
-        '[class*="success"]',
-        '[class*="toast"]',
-        '[class*="notification"]',
-        ".cart-drawer",
-        '[data-testid*="success"]',
-      ];
-
-      let hasSuccessMessage = false;
-      for (const selector of successSelectors) {
-        const element = page.locator(selector).first();
-        const visible = await element
-          .isVisible({ timeout: 2000 })
-          .catch(() => false);
-        if (visible) {
-          hasSuccessMessage = true;
-          break;
-        }
-      }
-
-      // 方式3: 检查按钮状态变化（如从"Add to Cart"变为"In Cart"）
-      const inCartButton = page
-        .locator('button:has-text("In Cart"), button:has-text("已在购物车")')
+      // 2️⃣ 记录购物车数量（如果存在）
+      const cartCountLocator = page
+        .locator("[data-cart-count], .cart-count-bubble, .cart-badge")
         .first();
-      const buttonStateChanged = await inCartButton
-        .isVisible({ timeout: 2000 })
-        .catch(() => false);
 
-      // 方式4: 如果以上都失败，尝试直接进入购物车页面验证（最可靠的方式）
-      let cartHasItem = false;
-      if (!cartChanged && !hasSuccessMessage && !buttonStateChanged) {
-        // 记录当前URL（可能是商品详情页）
-        const currentUrl = page.url();
+      const cartCountBefore = await cartCountLocator
+        .textContent()
+        .catch(() => null);
 
-        // 尝试多种方式打开购物车
-        // 方式1: 点击购物车链接
-        const cartLink = page.locator('a[href*="cart" i]').first();
-        const cartLinkVisible = await cartLink
-          .isVisible({ timeout: 3000 })
-          .catch(() => false);
+      const currentUrl = page.url();
 
-        if (cartLinkVisible) {
-          await cartLink.click({ timeout: 3000 }).catch(() => {});
-          if (!page.isClosed()) {
-            await page.waitForTimeout(2000).catch(() => {});
-          }
-        } else {
-          // 方式2: 直接导航到购物车页面
-          if (!page.isClosed() && currentUrl) {
-            try {
-              const cartUrl = new URL("/cart", currentUrl).href;
-              await page
-                .goto(cartUrl, {
-                  waitUntil: "domcontentloaded",
-                  timeout: 10000,
-                })
-                .catch(() => {});
-              if (!page.isClosed()) {
-                await page.waitForTimeout(2000).catch(() => {});
-              }
-            } catch (e) {
-              // 导航失败，忽略
-            }
-          }
-        }
+      // 3️⃣ 点击 + 同时监听可能的跳转
+      await Promise.all([
+        page.waitForLoadState("networkidle").catch(() => {}),
+        addToCartButton.click(),
+      ]);
 
-        // 检查页面是否已关闭
-        if (page.isClosed()) {
-          // 页面已关闭，无法验证，假设加购失败
-          cartHasItem = false;
-        } else {
-          // 检查是否在购物车页面
-          const isCartPage = page.url().includes("/cart");
-
-          if (isCartPage) {
-            // 关闭可能的弹窗
-            await closePopup(page).catch(() => {});
-
-            // 检查购物车中是否有商品（使用多种选择器）
-            const cartItemSelectors = [
-              ".cart-item",
-              '[data-testid*="cart-item"]',
-              ".line-item",
-              "tbody tr",
-              ".cart-row",
-              '[class*="cart-item"]',
-              '[class*="line-item"]',
-            ];
-
-            for (const selector of cartItemSelectors) {
-              if (page.isClosed()) break;
-              const cartItem = page.locator(selector).first();
-              cartHasItem = await cartItem
-                .isVisible({ timeout: 3000 })
-                .catch(() => false);
-              if (cartHasItem) {
-                break;
-              }
-            }
-
-            // 如果购物车有商品，说明加购成功
-            if (cartHasItem) {
-              // 保持在购物车页面，后续步骤会继续处理
-              // 不需要返回商品详情页
-            } else {
-              // 购物车为空，返回原页面
-              if (
-                !page.isClosed() &&
-                currentUrl &&
-                !currentUrl.includes("/cart")
-              ) {
-                await page
-                  .goto(currentUrl, {
-                    waitUntil: "domcontentloaded",
-                    timeout: 10000,
-                  })
-                  .catch(() => {});
-                if (!page.isClosed()) {
-                  await page.waitForTimeout(2000).catch(() => {});
-                }
-              }
-            }
-          } else {
-            // 如果不在购物车页面，返回原页面
-            if (
-              !page.isClosed() &&
-              currentUrl &&
-              !currentUrl.includes("/cart")
-            ) {
-              await page
-                .goto(currentUrl, {
-                  waitUntil: "domcontentloaded",
-                  timeout: 10000,
-                })
-                .catch(() => {});
-              if (!page.isClosed()) {
-                await page.waitForTimeout(2000).catch(() => {});
-              }
-            }
-          }
-        }
+      // 4️⃣ 成功判断方式一：跳转到 /cart
+      if (page.url().includes("/cart")) {
+        await expect(
+          page
+            .locator(".cart-item, .line-item, [data-testid*='cart-item']")
+            .first(),
+        ).toBeVisible({ timeout: 5000 });
+        return;
       }
 
-      // 至少有一个成功指标
-      const addToCartSuccess =
-        cartChanged || hasSuccessMessage || buttonStateChanged || cartHasItem;
+      // 5️⃣ 成功判断方式二：购物车数量变化
+      let cartChanged = false;
 
-      if (!addToCartSuccess) {
-        // 如果所有验证都失败，记录详细信息用于调试
-        console.log("加购验证失败详情:", {
-          cartCountBefore,
-          cartCountAfter,
-          cartChanged,
-          hasSuccessMessage,
-          buttonStateChanged,
-          cartHasItem,
+      if (cartCountBefore) {
+        await expect(cartCountLocator)
+          .not.toHaveText(cartCountBefore, {
+            timeout: 5000,
+          })
+          .then(() => {
+            cartChanged = true;
+          })
+          .catch(() => {});
+      }
+
+      // 6️⃣ 成功判断方式三：cart drawer 出现
+      const cartDrawerVisible = await page
+        .locator("#halo-side-cart-preview")
+        .first()
+        .isVisible()
+        .catch(() => false);
+
+      const success = cartChanged || cartDrawerVisible;
+
+      if (!success) {
+        console.log("加购验证失败", {
+          before: cartCountBefore,
+          after: await cartCountLocator.textContent().catch(() => null),
+          url: page.url(),
         });
       }
 
-      expect(addToCartSuccess).toBeTruthy();
+      expect(success).toBeTruthy();
     });
 
     // ========== 步骤 4: 进入购物车和结算页 ==========
@@ -806,15 +388,18 @@ test.describe("P0_COMPLETE_USER_JOURNEY - 完整用户旅程", () => {
       //   // 重试点击，如果还是失败则使用强制点击
       //   await cartIcon.click({ force: true, timeout: 5000 });
       // }
-      await expect(page.locator('#halo-side-cart-preview')).toBeVisible({ timeout: 5000 });
-      const viewCartButton = page
-        .locator('a.button-view-cart:has-text("View Cart")')
-        .or(page.locator('a.button-view-cart[href^="/cart"]'))
-        .first();
-      await viewCartButton.click({ timeout: 5000 });
+      // await expect(page.locator("#halo-side-cart-preview")).toBeVisible({
+      //   timeout: 5000,
+      // });
+      if (page.url().includes("/cart") == false) {
+        const viewCartButton = page
+          .locator('a.button-view-cart:has-text("View Cart")')
+          .or(page.locator('a.button-view-cart[href^="/cart"]'))
+          .first();
+        await viewCartButton.click({ timeout: 5000 });
+      }
       // 等待购物车页面加载
       await page.waitForURL(/\/cart/i, { timeout: 10000 }).catch(() => {});
-      await closePopup(page);
 
       // 验证购物车页面
       const cartTitle = page

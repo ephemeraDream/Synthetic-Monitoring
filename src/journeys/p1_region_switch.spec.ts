@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { getCurrentTarget, getAllTargets, Region } from "../config/targets";
-import { closePopup } from "../utils/popup";
+import { closePopup, waitAndClosePopup } from "../utils/popup";
 import { attachNetworkSummary } from "../utils/network";
 import { injectVitalsScript } from "../utils/vitals";
 import { waitRandom } from "../utils/random";
@@ -19,9 +19,8 @@ test.describe("P1_REGION_SWITCH - 区域切换", () => {
 
   test.beforeEach(async ({ page }) => {
     await injectVitalsScript(page);
-    await waitRandom(3000);
-    await page.goto(currentTarget.url, { waitUntil: "domcontentloaded" });
-    await closePopup(page);
+    await page.goto(currentTarget.url, { waitUntil: "load" });
+    await waitAndClosePopup(page);
   });
 
   // 测试切换到第一个可用区域
@@ -36,7 +35,8 @@ test.describe("P1_REGION_SWITCH - 区域切换", () => {
           .click({ timeout: 10000 });
 
         const hasRegionSelector = await page
-          .locator(`#navigation-mobile .currency-dropdown`)
+          .locator("#navigation-mobile .nav-currency-language")
+          .first()
           .isVisible({ timeout: 5000 })
           .catch(() => false);
 
@@ -55,10 +55,7 @@ test.describe("P1_REGION_SWITCH - 区域切换", () => {
       } else {
         // 查找区域切换器（可能是下拉菜单、链接或按钮）
         const regionSelector = page
-          .locator(
-            '[data-testid*="region"], [data-testid*="country"], .region-selector, .country-selector',
-          )
-          .or(page.getByRole("button", { name: /region|country|地区|国家/i }))
+          .locator(".header-language_currency, .top-language-currency")
           .first();
 
         const hasRegionSelector = await regionSelector
@@ -72,9 +69,7 @@ test.describe("P1_REGION_SWITCH - 区域切换", () => {
 
           // 查找目标区域的选项
           const targetOption = page
-            .getByRole("option", { name: new RegExp(targetRegion, "i") })
-            .or(page.locator(`a:has-text("${targetRegion}")`))
-            .or(page.locator(`button:has-text("${targetRegion}")`))
+            .locator(`a.dropdown-item[href*="${targetRegion}" i]`)
             .first();
 
           await expect(targetOption).toBeVisible({ timeout: 5000 });
@@ -86,10 +81,6 @@ test.describe("P1_REGION_SWITCH - 区域切换", () => {
           });
         }
       }
-
-      // 等待页面加载或 URL 变化
-      await page.waitForTimeout(2000);
-
       // 验证 URL 包含目标区域标识
       const currentUrl = page.url();
       const targetUrl = switchTargets[0].url;
@@ -114,9 +105,6 @@ test.describe("P1_REGION_SWITCH - 区域切换", () => {
 
       // 至少 URL 应该正确
       expect(urlMatches).toBeTruthy();
-
-      // 关闭可能出现的弹窗
-      await closePopup(page);
 
       if (isMobile) {
         // 验证页面正常加载（至少首页核心元素存在）

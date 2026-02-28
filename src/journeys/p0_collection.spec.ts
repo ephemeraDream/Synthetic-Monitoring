@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { getCurrentTarget } from "../config/targets";
-import { closePopup } from "../utils/popup";
+import { closePopup, waitAndClosePopup } from "../utils/popup";
 import { attachNetworkSummary } from "../utils/network";
 import { injectVitalsScript } from "../utils/vitals";
 import { waitRandom } from "../utils/random";
@@ -16,9 +16,9 @@ test.describe("P0_COLLECTION - 分类页列表", () => {
 
   test.beforeEach(async ({ page }) => {
     await injectVitalsScript(page);
-    await waitRandom(3000);
-    await page.goto(target.url, { waitUntil: "domcontentloaded" });
-    await closePopup(page);
+
+    await page.goto(target.url, { waitUntil: "load" });
+    await waitAndClosePopup(page);
   });
 
   for (const collection of collections) {
