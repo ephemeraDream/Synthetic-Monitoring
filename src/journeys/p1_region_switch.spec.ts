@@ -69,7 +69,9 @@ test.describe("P1_REGION_SWITCH - 区域切换", () => {
 
           // 查找目标区域的选项
           const targetOption = page
-            .locator(`a.dropdown-item[href*="${targetRegion}" i]`)
+            .locator(
+              `a.dropdown-item[href*="${targetRegion == "US" ? "com" : targetRegion}" i]`,
+            )
             .first();
 
           await expect(targetOption).toBeVisible({ timeout: 5000 });
@@ -87,16 +89,26 @@ test.describe("P1_REGION_SWITCH - 区域切换", () => {
 
       // URL 应该匹配目标区域（可能是域名或路径）
       const urlMatches =
-        currentUrl.includes(targetRegion.toLowerCase()) ||
+        currentUrl.includes(
+          targetRegion == "US" ? "com" : targetRegion.toLowerCase(),
+        ) ||
         currentUrl.includes(targetUrl.replace("https://", "").replace("/", ""));
 
       expect(urlMatches).toBeTruthy();
 
       // 验证区域标识在页面上（可能是标志、文本或 URL）
       const regionIndicator = page
-        .locator(`text=/${targetRegion}/i`)
-        .or(page.locator(`[data-region="${targetRegion}"]`))
-        .or(page.locator(`[data-country="${targetRegion}"]`))
+        .locator(`text=/${targetRegion == "US" ? "com" : targetRegion}/i`)
+        .or(
+          page.locator(
+            `[data-region="${targetRegion == "US" ? "com" : targetRegion}"]`,
+          ),
+        )
+        .or(
+          page.locator(
+            `[data-country="${targetRegion == "US" ? "com" : targetRegion}"]`,
+          ),
+        )
         .first();
 
       const hasRegionIndicator = await regionIndicator
