@@ -253,7 +253,7 @@ test.describe("P0_COMPLETE_USER_JOURNEY - 完整用户旅程", () => {
         .catch(() => false);
 
       if (isInputVisible) {
-        await searchInputFinal.fill("Athena");
+        await searchInputFinal.fill("Athena Pro");
         await page.waitForTimeout(1000); // 等待搜索建议/结果加载
         await searchInputFinal.press("Enter");
 
@@ -264,7 +264,7 @@ test.describe("P0_COMPLETE_USER_JOURNEY - 完整用户旅程", () => {
         await page.waitForTimeout(2000); // 等待结果加载
       } else {
         // 如果搜索框不可用，直接导航到搜索结果页
-        await page.goto(`${base}search?q=Athena`, {
+        await page.goto(`${base}search?q=athena+pro`, {
           waitUntil: "domcontentloaded",
         });
         await page.waitForTimeout(2000);
