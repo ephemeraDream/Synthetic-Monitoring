@@ -4,6 +4,7 @@ import { closePopup, waitAndClosePopup } from "../utils/popup";
 import { attachNetworkSummary } from "../utils/network";
 import { injectVitalsScript } from "../utils/vitals";
 import { waitRandom } from "../utils/random";
+import { waitAndCloseJumpPopup } from "@/utils/jumpPopup";
 
 /**
  * P0_PDP_ADD_TO_CART：商品详情页 -> Add to Cart -> cart 状态变化
@@ -14,6 +15,7 @@ test.describe("P0_PDP_ADD_TO_CART - 商品加购", () => {
   test.beforeEach(async ({ page }) => {
     await injectVitalsScript(page);
     await page.goto(target.url, { waitUntil: "load" });
+    await waitAndCloseJumpPopup(page);
     await waitAndClosePopup(page);
   });
 

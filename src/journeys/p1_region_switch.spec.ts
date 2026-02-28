@@ -4,6 +4,7 @@ import { closePopup, waitAndClosePopup } from "../utils/popup";
 import { attachNetworkSummary } from "../utils/network";
 import { injectVitalsScript } from "../utils/vitals";
 import { waitRandom } from "../utils/random";
+import { waitAndCloseJumpPopup } from "@/utils/jumpPopup";
 
 /**
  * P1_REGION_SWITCH：Regions 切换到另一个站点 -> URL/区域标识正确
@@ -20,6 +21,7 @@ test.describe("P1_REGION_SWITCH - 区域切换", () => {
   test.beforeEach(async ({ page }) => {
     await injectVitalsScript(page);
     await page.goto(currentTarget.url, { waitUntil: "load" });
+    await waitAndCloseJumpPopup(page);
     await waitAndClosePopup(page);
   });
 

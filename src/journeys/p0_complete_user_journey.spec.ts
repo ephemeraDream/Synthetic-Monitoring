@@ -10,6 +10,7 @@ import { attachHAR } from "../utils/har";
 import { installWebVitalsCollector, readWebVitals } from "../utils/vitals";
 import { jitterMs, pick, LOCALES } from "../utils/random";
 import { VITALS_THRESHOLDS } from "../config/vitals_thresholds";
+import { waitAndCloseJumpPopup } from "@/utils/jumpPopup";
 
 /**
  * P0_COMPLETE_USER_JOURNEY：完整用户旅程测试
@@ -42,7 +43,7 @@ test.describe("P0_COMPLETE_USER_JOURNEY - 完整用户旅程", () => {
 
     // 设置随机语言（模拟不同国家用户）
     await page.setExtraHTTPHeaders({ "Accept-Language": pick(LOCALES) });
-    await page.waitForTimeout(jitterMs()); // 随机延迟，模拟真实用户
+    // await page.waitForTimeout(jitterMs()); // 随机延迟，模拟真实用户
 
     // 安装 Web Vitals 采集器
     await installWebVitalsCollector(page);
@@ -78,6 +79,7 @@ test.describe("P0_COMPLETE_USER_JOURNEY - 完整用户旅程", () => {
     // ========== 步骤 1: 打开首页 ==========
     await test.step("步骤 1: 打开首页并验证", async () => {
       await page.goto(base, { waitUntil: "load" });
+      await waitAndCloseJumpPopup(page);
       await waitAndClosePopup(page);
 
       // 验证首页核心元素

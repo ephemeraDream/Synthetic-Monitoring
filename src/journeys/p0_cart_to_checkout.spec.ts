@@ -4,6 +4,7 @@ import { closePopup, waitAndClosePopup } from "../utils/popup";
 import { attachNetworkSummary } from "../utils/network";
 import { injectVitalsScript } from "../utils/vitals";
 import { waitRandom } from "../utils/random";
+import { waitAndCloseJumpPopup } from "@/utils/jumpPopup";
 
 /**
  * P0_CART_TO_CHECKOUT：cart -> checkout 前一步（不需要支付）
@@ -15,6 +16,7 @@ test.describe("P0_CART_TO_CHECKOUT - 购物车到结算", () => {
     await injectVitalsScript(page);
 
     await page.goto(target.url, { waitUntil: "load" });
+    await waitAndCloseJumpPopup(page);
     await waitAndClosePopup(page);
   });
 
@@ -110,7 +112,7 @@ test.describe("P0_CART_TO_CHECKOUT - 购物车到结算", () => {
     }
     // 等待购物车页面加载
     await page.waitForURL(/\/cart/i, { timeout: 10000 }).catch(() => {});
-    
+
     // 验证购物车页面元素
     const cartTitle = page
       .locator('h1, .cart-title, [data-testid="cart-title"]')

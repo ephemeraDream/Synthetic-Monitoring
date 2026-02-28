@@ -8,6 +8,7 @@ import {
   validateVitals,
 } from "../utils/vitals";
 import { getThresholds } from "../config/vitals_thresholds";
+import { waitAndCloseJumpPopup } from "../utils/jumpPopup";
 
 test.describe("P0_HOME - 首页核心功能", () => {
   const target = getCurrentTarget();
@@ -23,6 +24,7 @@ test.describe("P0_HOME - 首页核心功能", () => {
     });
 
     await page.goto(target.url, { waitUntil: "load" });
+    await waitAndCloseJumpPopup(page);
     await waitAndClosePopup(page);
   });
 

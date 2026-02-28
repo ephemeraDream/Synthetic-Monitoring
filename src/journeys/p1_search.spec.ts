@@ -4,6 +4,7 @@ import { closePopup, waitAndClosePopup } from "../utils/popup";
 import { attachNetworkSummary } from "../utils/network";
 import { injectVitalsScript } from "../utils/vitals";
 import { waitRandom } from "../utils/random";
+import { waitAndCloseJumpPopup } from "@/utils/jumpPopup";
 
 /**
  * P1_SEARCH：搜索 Athena/Atlas -> 结果出现 -> 进入 PDP
@@ -18,6 +19,7 @@ test.describe("P1_SEARCH - 搜索功能", () => {
     await injectVitalsScript(page);
 
     await page.goto(target.url, { waitUntil: "load" });
+    await waitAndCloseJumpPopup(page);
     await waitAndClosePopup(page);
   });
 

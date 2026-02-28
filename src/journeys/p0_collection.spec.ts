@@ -4,6 +4,7 @@ import { closePopup, waitAndClosePopup } from "../utils/popup";
 import { attachNetworkSummary } from "../utils/network";
 import { injectVitalsScript } from "../utils/vitals";
 import { waitRandom } from "../utils/random";
+import { waitAndCloseJumpPopup } from "@/utils/jumpPopup";
 
 /**
  * P0_COLLECTION：进入分类页（Chairs/Desks/Accessories）-> 列表加载
@@ -18,6 +19,7 @@ test.describe("P0_COLLECTION - 分类页列表", () => {
     await injectVitalsScript(page);
 
     await page.goto(target.url, { waitUntil: "load" });
+    await waitAndCloseJumpPopup(page);
     await waitAndClosePopup(page);
   });
 
