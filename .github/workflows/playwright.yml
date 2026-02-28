@@ -1,13 +1,13 @@
 name: Synthetic Monitoring
 
 on:
-#  schedule:
-#    - cron: "*/10 * * * *" # US
-#    - cron: "1-59/30 * * * *" # JP
-#    - cron: "2-59/30 * * * *" # CA
-#    - cron: "4-59/30 * * * *" # EU
-#    - cron: "6-59/30 * * * *" # UK
-#    - cron: "8-59/30 * * * *" # AU
+  schedule:
+    - cron: "*/10 * * * *" # US
+    - cron: "1-59/30 * * * *" # JP
+    - cron: "2-59/30 * * * *" # CA
+    - cron: "4-59/30 * * * *" # EU
+    - cron: "6-59/30 * * * *" # UK
+    - cron: "8-59/30 * * * *" # AU
   workflow_dispatch:
 
 concurrency:
