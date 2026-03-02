@@ -57,7 +57,7 @@ test.describe("P1_REGION_SWITCH - 区域切换", () => {
       } else {
         // 查找区域切换器（可能是下拉菜单、链接或按钮）
         const regionSelector = page
-          .locator(".header-language_currency, .top-language-currency")
+          .locator(".header-language_currency .halo-top-currency")
           .first();
 
         const hasRegionSelector = await regionSelector
