@@ -30,11 +30,7 @@ test.describe("P0_HOME - 首页核心功能", () => {
 
   test("首页加载并验证核心元素", async ({ page, isMobile }) => {
     if (isMobile) {
-      const menuButton = page
-        .locator(
-          'button[aria-label*="menu" i], button[aria-expanded], .menu-toggle, [data-menu-toggle]',
-        )
-        .first();
+      const menuButton = page.locator('button[aria-label*="menu" i]').first();
       await expect(menuButton).toBeVisible();
     } else {
       const nav = page.locator('nav[role="navigation"]').first();

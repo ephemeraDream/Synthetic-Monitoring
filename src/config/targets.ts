@@ -48,7 +48,7 @@ export const TARGETS: Record<TargetKey, TargetConfig> = {
  * 获取当前目标站点（从环境变量 TARGET 读取）
  */
 export function getCurrentTarget(): TargetConfig {
-  const target = (process.env.TARGET || 'US').toUpperCase() as Region;
+  const target = (process.env.TARGET || 'UK').toUpperCase() as Region;
   return TARGETS[target] || TARGETS.US;
 }
 
