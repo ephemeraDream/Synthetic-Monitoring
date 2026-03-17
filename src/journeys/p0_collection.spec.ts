@@ -54,29 +54,29 @@ test.describe("P0_COLLECTION - 分类页列表", () => {
           .first()
           .click();
       } else {
-        await page
-          .locator(
-            '.menu-lv-item .header__menu-item .text:has-text("Products")',
-          )
-          .hover({ timeout: 10000 });
+        // await page
+        //   .locator(
+        //     '.menu-lv-item .header__menu-item .text:has-text("Products")',
+        //   )
+        //   .hover({ timeout: 10000 });
 
-        const menuPart = page.locator(".container-cont-new").first();
+        // const menuPart = page.locator(".container-cont-new").first();
 
-        try {
-          await expect(menuPart).toBeVisible({ timeout: 10000 });
-        } catch {
-          // 如果没弹出，再点一次
-          await page
-            .locator(
-              '.menu-lv-item .header__menu-item .text:has-text("Products")',
-            )
-            .hover({ timeout: 10000 });
-          await expect(menuPart).toBeVisible();
-        }
+        // try {
+        //   await expect(menuPart).toBeVisible({ timeout: 10000 });
+        // } catch {
+        //   // 如果没弹出，再点一次
+        //   await page
+        //     .locator(
+        //       '.menu-lv-item .header__menu-item .text:has-text("Products")',
+        //     )
+        //     .hover({ timeout: 10000 });
+        //   await expect(menuPart).toBeVisible();
+        // }
 
         // 查找分类链接（优先使用文本匹配）
         const collectionLink = page
-          .locator(`a.nav-menu-items:has-text("${collection}")`)
+          .locator(`.menu-lv-item .header__menu-item .text:has-text("${collection}")`)
           .first();
 
         // 点击分类
