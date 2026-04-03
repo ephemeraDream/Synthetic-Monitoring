@@ -1,115 +1,237 @@
-import { test, expect } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { getCurrentTarget } from "../config/targets";
-import { closePopup, waitAndClosePopup } from "../utils/popup";
-import { attachNetworkSummary } from "../utils/network";
-import { injectVitalsScript } from "../utils/vitals";
-import { waitRandom } from "../utils/random";
-import { waitAndCloseJumpPopup } from "@/utils/jumpPopup";
+import { pick, LOCALES } from "../utils/random";
+import { installWebVitalsCollector } from "../utils/vitals";
+import {
+  attachJourneyEvidence,
+  closeSitePopups,
+  firstVisible,
+  navigateByLocatorHref,
+  openMobileMenu,
+  openStorefrontPage,
+  setupJourneyDiagnostics,
+} from "../utils/storefrontJourney";
 
-/**
- * P0_COLLECTION：进入分类页（Chairs/Desks/Accessories）-> 列表加载
- */
+type CollectionConfig = {
+  expectedCollectionText: RegExp;
+  expectedProductText: RegExp;
+  landingLinkText: RegExp;
+  name: string;
+  path: string;
+};
+
+const COLLECTIONS: CollectionConfig[] = [
+  {
+    name: "Chairs",
+    path: "/collections/gaming-chairs",
+    landingLinkText: /All Gaming Chairs/i,
+    expectedCollectionText: /Blacklyte gaming chairs/i,
+    expectedProductText: /Athena Pro Gaming Chair|Kraken Pro Gaming Chair|Athena Gaming Chair/i,
+  },
+  {
+    name: "Desks",
+    path: "/collections/desks",
+    landingLinkText: /All Desks/i,
+    expectedCollectionText: /Blacklyte desks/i,
+    expectedProductText: /Atlas Desk|Atlas Lite Standing Desk/i,
+  },
+  {
+    name: "Accessories",
+    path: "/collections/accessories",
+    landingLinkText: /^Accessories$/i,
+    expectedCollectionText: /Blacklyte accessories/i,
+    expectedProductText: /Atlas Dual Monitor Arm|Atlas Monitor Arm|Lumbar Pillow/i,
+  },
+];
+
+async function openProductsLanding(
+  page: Page,
+  baseUrl: string,
+  isMobile: boolean,
+): Promise<void> {
+  await openStorefrontPage(page, baseUrl);
+
+  const productsLink = isMobile
+    ? await (async () => {
+        await openMobileMenu(page);
+
+        return firstVisible(
+          [
+            page
+              .locator('#navigation-mobile a[href="/pages/collections"]')
+              .filter({ hasText: /^Products$/i })
+              .first(),
+            page
+              .locator('.halo-sidebar a[href="/pages/collections"]')
+              .filter({ hasText: /^Products$/i })
+              .first(),
+            page
+              .locator('a[href="/pages/collections"]')
+              .filter({ hasText: /^Products$/i })
+              .first(),
+          ],
+          8000,
+        );
+      })()
+    : await firstVisible(
+        [
+          page
+            .locator('header nav a[href="/pages/collections"]')
+            .filter({ hasText: /^Products$/i })
+            .first(),
+          page
+            .locator('a[href="/pages/collections"]')
+            .filter({ hasText: /^Products$/i })
+            .first(),
+        ],
+        8000,
+      );
+
+  expect(productsLink, "未找到 Products 入口").not.toBeNull();
+
+  await navigateByLocatorHref(page, productsLink!, (url) => url.pathname === "/pages/collections");
+  await closeSitePopups(page);
+
+  const landingReady = await firstVisible(
+    [
+      page.locator('main a[href="/collections/gaming-chairs"]').first(),
+      page.locator('main a[href="/collections/desks"]').first(),
+      page.locator('main a[href="/collections/accessories"]').first(),
+    ],
+    10000,
+  );
+  expect(landingReady, "Collections landing page 未出现真实分类入口").not.toBeNull();
+}
+
+async function openCollectionFromLanding(
+  page: Page,
+  config: CollectionConfig,
+): Promise<void> {
+  const collectionLink = await firstVisible(
+    [
+      page
+        .locator(`main a[href="${config.path}"]`)
+        .filter({ hasText: config.landingLinkText })
+        .first(),
+      page
+        .locator(`a[href="${config.path}"]`)
+        .filter({ hasText: config.landingLinkText })
+        .first(),
+    ],
+    10000,
+  );
+  expect(collectionLink, `未找到 ${config.name} 分类入口`).not.toBeNull();
+
+  await navigateByLocatorHref(page, collectionLink!, (url) => url.pathname === config.path);
+  await closeSitePopups(page);
+}
+
+async function assertCollectionPage(
+  page: Page,
+  config: CollectionConfig,
+): Promise<void> {
+  await expect(page.locator("main")).toBeVisible({ timeout: 10000 });
+
+  const collectionTitle = await firstVisible(
+    [
+      page
+        .locator(".collection_head_new_select_title")
+        .filter({ hasText: config.expectedCollectionText })
+        .first(),
+      page.locator("main").getByText(config.expectedCollectionText).first(),
+    ],
+    8000,
+  );
+
+  const mainHasCollectionText = await expect
+    .poll(
+      async () => {
+        const text = await page.locator("main").textContent().catch(() => null);
+        return config.expectedCollectionText.test(text ?? "");
+      },
+      {
+        timeout: 10000,
+        message: `${config.name} 分类页主内容未出现预期标题`,
+      },
+    )
+    .toBeTruthy()
+    .then(() => true)
+    .catch(() => false);
+
+  expect(
+    collectionTitle !== null || mainHasCollectionText,
+    `${config.name} 分类页标题未出现`,
+  ).toBeTruthy();
+
+  const productGrid = await firstVisible(
+    [
+      page.locator(".collection-banner-adv .collection .productGrid").first(),
+      page.locator(".new-chairs-collection-section .productGrid").first(),
+      page.locator(".productGrid").first(),
+    ],
+    10000,
+  );
+  expect(productGrid, `${config.name} 分类页商品列表容器未出现`).not.toBeNull();
+
+  const productLink = await firstVisible(
+    [
+      page
+        .locator("main a[href*='/products/']")
+        .filter({ hasText: config.expectedProductText })
+        .first(),
+      page
+        .locator(".variable-products a[href*='/products/']")
+        .filter({ hasText: config.expectedProductText })
+        .first(),
+      page
+        .locator(".product-item a[href*='/products/']")
+        .filter({ hasText: config.expectedProductText })
+        .first(),
+    ],
+    10000,
+  );
+  expect(productLink, `${config.name} 分类页未出现真实商品链接`).not.toBeNull();
+
+  const visibleProductCards = await page
+    .locator(".variable-products, .product-item")
+    .evaluateAll((nodes) =>
+      nodes.filter(
+        (node) =>
+          node instanceof HTMLElement &&
+          !!(node.offsetWidth || node.offsetHeight || node.getClientRects().length),
+      ).length,
+    )
+    .catch(() => 0);
+  expect(visibleProductCards, `${config.name} 分类页没有可见商品卡`).toBeGreaterThan(0);
+}
+
 test.describe("P0_COLLECTION - 分类页列表", () => {
   const target = getCurrentTarget();
 
-  // 测试的分类列表
-  const collections = ["Chairs", "Desks", "Accessories"];
+  for (const collection of COLLECTIONS) {
+    test(`分类页加载: ${collection.name}`, async ({ page, isMobile }, testInfo) => {
+      const diagnostics = setupJourneyDiagnostics(page);
 
-  test.beforeEach(async ({ page }) => {
-    await injectVitalsScript(page);
+      await installWebVitalsCollector(page);
+      await page.setExtraHTTPHeaders({ "Accept-Language": pick(LOCALES) });
 
-    await page.goto(target.url, { waitUntil: "load" });
-    await waitAndCloseJumpPopup(page);
-    await waitAndClosePopup(page);
-  });
+      try {
+        await test.step("从首页进入 Products landing page", async () => {
+          await openProductsLanding(page, target.url, isMobile);
+        });
 
-  for (const collection of collections) {
-    test(`分类页加载: ${collection}`, async ({ page, isMobile }) => {
-      if (isMobile) {
-        await page
-          .locator(".header-mobile__item--menu .mobileMenu-toggle")
-          .click({ timeout: 10000 });
+        await test.step(`进入 ${collection.name} 分类页`, async () => {
+          await openCollectionFromLanding(page, collection);
+        });
 
-        // 查找分类链接（优先使用文本匹配）
-        const collectionLinkMb = page
-          .locator(`#navigation-mobile a.menu_text:has-text("${collection}")`)
-          .first();
-
-        // 点击分类
-        await expect(collectionLinkMb).toBeVisible({ timeout: 10000 });
-        await collectionLinkMb.click();
-
-        // 点击分类
-        await expect(
-          page
-            .locator(
-              `#navigation-mobile .all-chairs-line[data-url*="${collection}" i]`,
-            )
-            .first(),
-        ).toBeVisible({ timeout: 10000 });
-        await page
-          .locator(
-            `#navigation-mobile .all-chairs-line[data-url*="${collection}" i]`,
-          )
-          .first()
-          .click();
-      } else {
-        // await page
-        //   .locator(
-        //     '.menu-lv-item .header__menu-item .text:has-text("Products")',
-        //   )
-        //   .hover({ timeout: 10000 });
-
-        // const menuPart = page.locator(".container-cont-new").first();
-
-        // try {
-        //   await expect(menuPart).toBeVisible({ timeout: 10000 });
-        // } catch {
-        //   // 如果没弹出，再点一次
-        //   await page
-        //     .locator(
-        //       '.menu-lv-item .header__menu-item .text:has-text("Products")',
-        //     )
-        //     .hover({ timeout: 10000 });
-        //   await expect(menuPart).toBeVisible();
-        // }
-
-        // 查找分类链接（优先使用文本匹配）
-        const collectionLink = page
-          .locator(`.menu-lv-item .header__menu-item .text:has-text("${collection}")`)
-          .first();
-
-        // 点击分类
-        await expect(collectionLink).toBeVisible({ timeout: 10000 });
-        await collectionLink.click();
+        await test.step(`${collection.name} 分类页列表真实加载`, async () => {
+          await assertCollectionPage(page, collection);
+        });
+      } finally {
+        await test.step("收集关键证据", async () => {
+          await attachJourneyEvidence(page, testInfo, diagnostics);
+        });
       }
-
-      // 等待 URL 变化（分类页通常有路径变化）
-      await page
-        .waitForURL(/\/collections?|\/category|\/shop/i, { timeout: 10000 })
-        .catch(() => {});
-
-      // 验证分类页标题或面包屑
-      const pageTitle = page
-        .locator(".collection_head_new_select_title")
-        .filter({ hasText: new RegExp(collection, "i") })
-        .first();
-      await expect(pageTitle).toBeVisible({ timeout: 10000 });
-
-      // 验证产品列表容器存在
-      const productGrid = page
-        .locator(".collection-banner-adv .collection .productGrid")
-        .first();
-      await expect(productGrid).toBeVisible({ timeout: 10000 });
-
-      // 验证至少有一个产品卡片
-      const productCard = page
-        .locator('.variable-products, .product-item, [data-testid*="product"]')
-        .first();
-      await expect(productCard).toBeVisible({ timeout: 10000 });
-
-      // 收集网络摘要
-      await attachNetworkSummary(page, test);
     });
   }
 });

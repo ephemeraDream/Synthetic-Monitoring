@@ -1,137 +1,243 @@
-import { test, expect } from "@playwright/test";
-import { getCurrentTarget, getAllTargets, Region } from "../config/targets";
-import { closePopup, waitAndClosePopup } from "../utils/popup";
-import { attachNetworkSummary } from "../utils/network";
-import { injectVitalsScript } from "../utils/vitals";
-import { waitRandom } from "../utils/random";
-import { waitAndCloseJumpPopup } from "@/utils/jumpPopup";
+import { expect, test, type Locator, type Page } from "@playwright/test";
+import {
+  getAllTargets,
+  getCurrentTarget,
+  type Region,
+  type TargetConfig,
+} from "../config/targets";
+import { pick, LOCALES } from "../utils/random";
+import { installWebVitalsCollector } from "../utils/vitals";
+import {
+  attachJourneyEvidence,
+  closeSitePopups,
+  firstVisible,
+  isTemporaryErrorPage,
+  navigateByLocatorHref,
+  openMobileMenu,
+  openStableStorefrontPage,
+  setupJourneyDiagnostics,
+} from "../utils/storefrontJourney";
 
-/**
- * P1_REGION_SWITCH：Regions 切换到另一个站点 -> URL/区域标识正确
- */
+const REGION_LABELS: Record<Region, string> = {
+  US: "United States",
+  CA: "Canada",
+  EU: "Europe",
+  UK: "United Kingdom",
+  AU: "Australia",
+  JP: "Japan",
+};
+
+function normalizeHost(url: string): string {
+  return new URL(url).hostname.replace(/^www\./i, "").toLowerCase();
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+async function findDesktopRegionOption(
+  page: Page,
+  target: TargetConfig,
+): Promise<Locator> {
+  const targetLabel = REGION_LABELS[target.region];
+  const targetHost = normalizeHost(target.url);
+  const optionLocators = [
+    page
+      .locator(`.halo-currency a.dropdown-item[href*="${targetHost}"]`)
+      .filter({ hasText: new RegExp(targetLabel, "i") })
+      .first(),
+    page
+      .locator(`a.dropdown-item[href*="${targetHost}"]`)
+      .filter({ hasText: new RegExp(targetLabel, "i") })
+      .first(),
+  ];
+
+  let targetOption = await firstVisible(optionLocators, 4000);
+
+  if (!targetOption) {
+    const trigger = await firstVisible(
+      [
+        page.locator(".halo-top-currency .dropdown-label").first(),
+        page.locator(".halo-top-currency .text").first(),
+        page.locator(".header-language_currency .halo-top-currency").first(),
+      ],
+      5000,
+    );
+    expect(trigger, "桌面端未找到 Regions 触发器").not.toBeNull();
+
+    await trigger!.click({ force: true });
+    targetOption = await firstVisible(optionLocators, 8000);
+  }
+
+  expect(targetOption, `桌面端未找到 ${targetLabel} 区域选项`).not.toBeNull();
+  return targetOption!;
+}
+
+async function findMobileRegionOption(
+  page: Page,
+  target: TargetConfig,
+): Promise<Locator> {
+  await openMobileMenu(page);
+
+  const targetLabel = REGION_LABELS[target.region];
+  const targetHost = normalizeHost(target.url);
+  const targetOption = await firstVisible(
+    [
+      page
+        .locator(`.currency-block a.dropdown-item[href*="${targetHost}"]`)
+        .filter({ hasText: new RegExp(targetLabel, "i") })
+        .first(),
+      page
+        .locator(`.currency-block [role="button"][href*="${targetHost}"]`)
+        .filter({ hasText: new RegExp(targetLabel, "i") })
+        .first(),
+      page
+        .locator(`.halo-sidebar_menu a.dropdown-item[href*="${targetHost}"]`)
+        .filter({ hasText: new RegExp(targetLabel, "i") })
+        .first(),
+      page
+        .locator(`a.dropdown-item[href*="${targetHost}"]`)
+        .filter({ hasText: new RegExp(targetLabel, "i") })
+        .first(),
+    ],
+    8000,
+  );
+  expect(targetOption, `移动端未找到 ${targetLabel} 区域选项`).not.toBeNull();
+
+  await targetOption!.scrollIntoViewIfNeeded().catch(() => {});
+  return targetOption!;
+}
+
+async function switchByRegionOption(
+  page: Page,
+  targetOption: Locator,
+  target: TargetConfig,
+): Promise<void> {
+  const targetHost = normalizeHost(target.url);
+
+  await navigateByLocatorHref(
+    page,
+    targetOption,
+    (url) => normalizeHost(url.toString()) === targetHost,
+    20000,
+  );
+  await closeSitePopups(page);
+}
+
+async function assertRegionLanding(
+  page: Page,
+  target: TargetConfig,
+  isMobile: boolean,
+): Promise<void> {
+  const targetLabel = REGION_LABELS[target.region];
+  const targetHost = normalizeHost(target.url);
+
+  await expect
+    .poll(() => normalizeHost(page.url()), {
+      timeout: 20000,
+      message: `URL 一直没有切到 ${target.region} 站点`,
+    })
+    .toBe(targetHost);
+
+  expect(await isTemporaryErrorPage(page), `${target.region} 站点落地后出现错误页`).toBeFalsy();
+  await expect(page.locator("main")).toBeVisible({ timeout: 10000 });
+
+  if (isMobile) {
+    await openMobileMenu(page);
+
+    const mobileRegionIndicator = await firstVisible(
+      [
+        page
+          .locator(".currency-block .current_country_items .current_text")
+          .filter({ hasText: new RegExp(targetLabel, "i") })
+          .first(),
+        page
+          .locator(".currency-block .current_country_items")
+          .filter({ hasText: new RegExp(targetLabel, "i") })
+          .first(),
+      ],
+      8000,
+    );
+    const titleHasRegion = new RegExp(
+      `${escapeRegExp(target.region)}|${escapeRegExp(targetLabel)}`,
+      "i",
+    ).test(await page.title().catch(() => ""));
+
+    expect(
+      mobileRegionIndicator !== null || titleHasRegion,
+      `移动端未显示当前区域为 ${targetLabel}`,
+    ).toBeTruthy();
+  } else {
+    const desktopRegionIndicator = await firstVisible(
+      [
+        page
+          .locator(".halo-top-currency .text")
+          .filter({ hasText: new RegExp(targetLabel, "i") })
+          .first(),
+        page
+          .locator(".current_country_items .current_text")
+          .filter({ hasText: new RegExp(targetLabel, "i") })
+          .first(),
+      ],
+      8000,
+    );
+    expect(desktopRegionIndicator, `桌面端未显示当前区域为 ${targetLabel}`).not.toBeNull();
+  }
+
+  const headerReady = await firstVisible(
+    [
+      page.getByRole("navigation").first(),
+      page.locator("header nav").first(),
+      page.locator(".header__heading-link").first(),
+      page.locator('a[href="/"] img[alt*="blacklyte" i]').first(),
+      page.locator('header a[href="/"]').first(),
+    ],
+    8000,
+  );
+  expect(headerReady, `${target.region} 站点首页核心页头未出现`).not.toBeNull();
+}
+
 test.describe("P1_REGION_SWITCH - 区域切换", () => {
   const currentTarget = getCurrentTarget();
-  const allTargets = getAllTargets();
+  const switchTarget = getAllTargets().find((target) => target.region !== currentTarget.region);
 
-  // 获取除当前区域外的其他区域作为切换目标
-  const switchTargets = allTargets.filter(
-    (t) => t.region !== currentTarget.region,
-  );
+  test(`切换到 ${switchTarget?.region ?? "目标区域"} 站点`, async ({ page, isMobile }, testInfo) => {
+    test.skip(!switchTarget, "当前没有可切换的其他区域");
+    if (!switchTarget) {
+      return;
+    }
 
-  test.beforeEach(async ({ page }) => {
-    await injectVitalsScript(page);
-    await page.goto(currentTarget.url, { waitUntil: "load" });
-    await waitAndCloseJumpPopup(page);
-    await waitAndClosePopup(page);
+    const diagnostics = setupJourneyDiagnostics(page);
+    let targetOption: Locator | null = null;
+
+    await installWebVitalsCollector(page);
+    await page.setExtraHTTPHeaders({ "Accept-Language": pick(LOCALES) });
+
+    try {
+      await test.step("打开当前区域首页", async () => {
+        await openStableStorefrontPage(page, currentTarget.url, undefined, {
+          attempts: 2,
+        });
+      });
+
+      await test.step("找到真实区域切换入口", async () => {
+        targetOption = isMobile
+          ? await findMobileRegionOption(page, switchTarget)
+          : await findDesktopRegionOption(page, switchTarget);
+      });
+
+      await test.step(`切换到 ${switchTarget.region} 站点`, async () => {
+        expect(targetOption, `${switchTarget.region} 区域选项未准备好`).not.toBeNull();
+        await switchByRegionOption(page, targetOption!, switchTarget);
+      });
+
+      await test.step("目标区域站点正常加载", async () => {
+        await assertRegionLanding(page, switchTarget, isMobile);
+      });
+    } finally {
+      await test.step("收集关键证据", async () => {
+        await attachJourneyEvidence(page, testInfo, diagnostics);
+      });
+    }
   });
-
-  // 测试切换到第一个可用区域
-  if (switchTargets.length > 0) {
-    const targetRegion = switchTargets[0].region;
-
-    test(`切换到 ${targetRegion} 区域`, async ({ page, isMobile }) => {
-      if (isMobile) {
-        // 查找区域切换器（可能是下拉菜单、链接或按钮）
-        await page
-          .locator(".header-mobile__item--menu .mobileMenu-toggle")
-          .click({ timeout: 10000 });
-
-        const hasRegionSelector = await page
-          .locator("#navigation-mobile .nav-currency-language")
-          .first()
-          .isVisible({ timeout: 5000 })
-          .catch(() => false);
-
-        if (hasRegionSelector) {
-          // 点击区域选择器
-          await page
-            .locator(`#navigation-mobile a.dropdown-item`)
-            .nth(1)
-            .click({ timeout: 5000 });
-        } else {
-          // 如果没有区域选择器，尝试直接访问目标 URL
-          await page.goto(switchTargets[0].url, {
-            waitUntil: "domcontentloaded",
-          });
-        }
-      } else {
-        // 查找区域切换器（可能是下拉菜单、链接或按钮）
-        const regionSelector = page
-          .locator(".header-language_currency .halo-top-currency")
-          .first();
-
-        const hasRegionSelector = await regionSelector
-          .isVisible({ timeout: 5000 })
-          .catch(() => false);
-
-        if (hasRegionSelector) {
-          // 点击区域选择器
-          await regionSelector.click();
-          await page.waitForTimeout(500);
-
-          // 查找目标区域的选项
-          const targetOption = page
-            .locator(
-              `a.dropdown-item[href*="${targetRegion == "US" ? "com" : targetRegion}" i]`,
-            )
-            .first();
-
-          await expect(targetOption).toBeVisible({ timeout: 5000 });
-          await targetOption.click();
-        } else {
-          // 如果没有区域选择器，尝试直接访问目标 URL
-          await page.goto(switchTargets[0].url, {
-            waitUntil: "domcontentloaded",
-          });
-        }
-      }
-      // 验证 URL 包含目标区域标识
-      const currentUrl = page.url();
-      const targetUrl = switchTargets[0].url;
-
-      // URL 应该匹配目标区域（可能是域名或路径）
-      const urlMatches =
-        currentUrl.includes(
-          targetRegion == "US" ? "com" : targetRegion.toLowerCase(),
-        ) ||
-        currentUrl.includes(targetUrl.replace("https://", "").replace("/", ""));
-
-      expect(urlMatches).toBeTruthy();
-
-      // 验证区域标识在页面上（可能是标志、文本或 URL）
-      const regionIndicator = page
-        .locator(`text=/${targetRegion == "US" ? "com" : targetRegion}/i`)
-        .or(
-          page.locator(
-            `[data-region="${targetRegion == "US" ? "com" : targetRegion}"]`,
-          ),
-        )
-        .or(
-          page.locator(
-            `[data-country="${targetRegion == "US" ? "com" : targetRegion}"]`,
-          ),
-        )
-        .first();
-
-      const hasRegionIndicator = await regionIndicator
-        .isVisible({ timeout: 5000 })
-        .catch(() => false);
-
-      // 至少 URL 应该正确
-      expect(urlMatches).toBeTruthy();
-
-      if (isMobile) {
-        // 验证页面正常加载（至少首页核心元素存在）
-        const nav = page.locator(".header-mobile").first();
-        await expect(nav).toBeVisible({ timeout: 10000 });
-      } else {
-        // 验证页面正常加载（至少首页核心元素存在）
-        const nav = page.locator("nav").first();
-        await expect(nav).toBeVisible({ timeout: 10000 });
-      }
-
-      // 收集网络摘要
-      await attachNetworkSummary(page, test);
-    });
-  }
 });

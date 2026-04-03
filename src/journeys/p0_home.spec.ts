@@ -1,188 +1,119 @@
-import { test, expect } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
 import { getCurrentTarget } from "../config/targets";
-import { closePopup, waitAndClosePopup } from "../utils/popup";
-import { attachNetworkSummary } from "../utils/network";
+import { pick, LOCALES } from "../utils/random";
+import { installWebVitalsCollector } from "../utils/vitals";
 import {
-  injectVitalsScript,
-  getWebVitals,
-  validateVitals,
-} from "../utils/vitals";
-import { getThresholds } from "../config/vitals_thresholds";
-import { waitAndCloseJumpPopup } from "../utils/jumpPopup";
+  attachJourneyEvidence,
+  closeMobileMenu,
+  firstVisible,
+  openMobileMenu,
+  openStorefrontPage,
+  setupJourneyDiagnostics,
+} from "../utils/storefrontJourney";
 
 test.describe("P0_HOME - 首页核心功能", () => {
   const target = getCurrentTarget();
 
-  test.beforeEach(async ({ page }) => {
-    await injectVitalsScript(page);
+  test("首页加载并验证核心元素", async ({ page, isMobile }, testInfo) => {
+    const diagnostics = setupJourneyDiagnostics(page);
 
-    const consoleErrors: string[] = [];
-    page.on("console", (msg) => {
-      if (msg.type() === "error") {
-        consoleErrors.push(msg.text());
-      }
-    });
+    await installWebVitalsCollector(page);
+    await page.setExtraHTTPHeaders({ "Accept-Language": pick(LOCALES) });
 
-    await page.goto(target.url, { waitUntil: "load" });
-    await waitAndCloseJumpPopup(page);
-    await waitAndClosePopup(page);
-  });
+    try {
+      await openStorefrontPage(page, target.url);
 
-  test("首页加载并验证核心元素", async ({ page, isMobile }) => {
-    if (isMobile) {
-      const menuButton = page.locator('button[aria-label*="menu" i]').first();
-      await expect(menuButton).toBeVisible();
-    } else {
-      const nav = page.locator('nav[role="navigation"]').first();
-      await expect(nav).toBeVisible();
-    }
+      await test.step("首页基础结构可见", async () => {
+        await expect(page.locator("main")).toBeVisible({ timeout: 10000 });
 
-    const logoSelectors = [
-      '[data-testid="logo"]',
-      ".logo",
-      'img[alt*="blacklyte" i]',
-      'a[href="/"]',
-      'header a[href="/"]',
-      ".header__heading-link",
-    ];
+        const logo = await firstVisible(
+          [
+            page.getByRole("link", { name: /Blacklyte/i }),
+            page.locator('a[href="/"] img[alt*="blacklyte" i]'),
+            page.locator('a[href="/"]'),
+          ],
+          5000,
+        );
+        expect(logo, "首页 Logo 未出现").not.toBeNull();
 
-    let logoFound = false;
-    for (const selector of logoSelectors) {
-      const logo = page.locator(selector).first();
-      const isVisible = await logo
-        .isVisible({ timeout: 2000 })
-        .catch(() => false);
-      if (isVisible) {
-        logoFound = true;
-        break;
-      }
-    }
+        const cartLink = await firstVisible(
+          [
+            page.locator('a[href="/cart"].cart-icon-bubble'),
+            page.getByRole("link", { name: /Cart .*item/i }),
+            page.locator('a[href="/cart"]'),
+          ],
+          5000,
+        );
+        expect(cartLink, "首页购物车入口未出现").not.toBeNull();
 
-    if (!logoFound) {
-      const headerExists = (await page.locator("header").count()) > 0;
-      const logoInDom =
-        (await page
-          .locator('a[href="/"], .logo, [data-testid="logo"]')
-          .count()) > 0;
+        const searchEntry = await firstVisible(
+          isMobile
+            ? [
+                page.locator(".header-mobile__item--search .header__search .header__icon"),
+                page.locator(".header__search-full"),
+                page.locator('summary[aria-label="Search"]'),
+              ]
+            : [
+                page.locator('summary[aria-label="Search"]'),
+                page.locator(".header__search-full"),
+              ],
+          5000,
+        );
+        expect(searchEntry, "首页搜索入口未出现").not.toBeNull();
 
-      const currentUrl = page.url();
-      const urlMatches =
-        currentUrl.includes("blacklyte") || currentUrl === target.url;
+        const heroHeading = await firstVisible(
+          [
+            page.getByRole("heading", { name: /Explore Our Bestsellers/i }),
+            page.getByRole("heading", {
+              name: /Blacklyte makes the best ergonomic gaming chairs and desks/i,
+            }),
+            page.getByRole("heading", { name: /Voice of Leaders in Community/i }),
+          ],
+          10000,
+        );
+        expect(heroHeading, "首页核心内容区未出现").not.toBeNull();
+      });
 
-      expect(headerExists || logoInDom || urlMatches).toBeTruthy();
-    } else {
-      expect(logoFound).toBeTruthy();
-    }
+      await test.step("导航入口可用", async () => {
+        if (isMobile) {
+          await openMobileMenu(page);
 
-    if (isMobile) {
-      const menuButton = page
-        .locator(
-          'button[aria-label*="menu" i], button[aria-expanded], .menu-toggle',
-        )
-        .first();
-      const menuButtonVisible = await menuButton
-        .isVisible({ timeout: 2000 })
-        .catch(() => false);
-      if (menuButtonVisible) {
-        await menuButton.click();
-        await page.waitForTimeout(500);
-      }
-    }
+          const accountEntry = await firstVisible(
+            [
+              page.getByRole("link", { name: /Sign In/i }),
+              page.getByRole("link", { name: /Create an Account/i }),
+            ],
+            5000,
+          );
+          expect(accountEntry, "移动端菜单展开后未出现账号入口").not.toBeNull();
 
-    const navLinks = page.locator("nav a, header a").filter({ hasNotText: "" });
-    const navLinkCount = await navLinks.count();
-    expect(navLinkCount).toBeGreaterThan(0);
-
-    await expect(page.locator("main, #MainContent")).toBeVisible({
-      timeout: 10000,
-    });
-
-    const cartLink = page.locator('a[href*="cart" i]').first();
-    const cartLinkVisible = await cartLink
-      .isVisible({ timeout: 3000 })
-      .catch(() => false);
-
-    if (cartLinkVisible) {
-      await expect(cartLink).toBeVisible({ timeout: 1000 });
-    } else {
-      const cartButtons = page.locator('button[aria-label*="cart" i]').all();
-      let foundCartButton = false;
-
-      for (const button of await cartButtons) {
-        const ariaLabel = await button.getAttribute("aria-label");
-        if (ariaLabel && !ariaLabel.toLowerCase().includes("close")) {
-          const isVisible = await button
-            .isVisible({ timeout: 1000 })
-            .catch(() => false);
-          if (isVisible) {
-            foundCartButton = true;
-            break;
-          }
-        }
-      }
-
-      if (!foundCartButton) {
-        const cartIcon = page
-          .locator(
-            '[data-testid*="cart" i]:not([data-testid*="close" i]), .cart-icon, .cart-link',
-          )
-          .first();
-        const cartIconVisible = await cartIcon
-          .isVisible({ timeout: 3000 })
-          .catch(() => false);
-
-        if (!cartIconVisible && !foundCartButton && !cartLinkVisible) {
-          const cartInDom =
-            (await page
-              .locator('a[href*="cart" i], [data-testid*="cart" i]')
-              .count()) > 0;
-
-          if (isMobile) {
-            const pageLoaded = await page.evaluate(() => {
-              return document.body && document.body.children.length > 0;
-            });
-            expect(pageLoaded).toBeTruthy();
-          } else {
-            expect(
-              cartIconVisible ||
-                foundCartButton ||
-                cartLinkVisible ||
-                cartInDom,
-            ).toBeTruthy();
-          }
+          await closeMobileMenu(page);
         } else {
-          expect(
-            cartIconVisible || foundCartButton || cartLinkVisible,
-          ).toBeTruthy();
-        }
-      }
-    }
+          const desktopNav = await firstVisible(
+            [
+              page.locator("header nav"),
+              page.getByRole("navigation"),
+            ],
+            5000,
+          );
+          expect(desktopNav, "桌面端导航未出现").not.toBeNull();
 
-    await attachNetworkSummary(page, test);
-
-    try {
-      if (!page.isClosed()) {
-        const vitals = await getWebVitals(page);
-        const validation = validateVitals(vitals, getThresholds("P0"));
-        if (!validation.passed) {
-          console.warn("Web Vitals 未达标:", validation.failures);
+          const primaryNavLink = await firstVisible(
+            [
+              desktopNav!.getByRole("link", { name: /Products/i }),
+              desktopNav!.getByRole("link", { name: /Chairs/i }),
+              desktopNav!.getByRole("link", { name: /Desks/i }),
+              desktopNav!.getByRole("link", { name: /Accessories/i }),
+            ],
+            5000,
+          );
+          expect(primaryNavLink, "桌面端关键导航链接未出现").not.toBeNull();
         }
-      }
-    } catch (error) {
-      console.warn("无法收集 Web Vitals:", error);
-    }
-
-    try {
-      if (!page.isClosed()) {
-        const consoleErrors = await page.evaluate(() => {
-          return (window as any).__consoleErrors || [];
-        });
-        if (consoleErrors.length > 0) {
-          console.warn("发现 Console Errors:", consoleErrors);
-        }
-      }
-    } catch (error) {
-      console.warn("无法收集 Console Errors:", error);
+      });
+    } finally {
+      await test.step("收集关键证据", async () => {
+        await attachJourneyEvidence(page, testInfo, diagnostics);
+      });
     }
   });
 });

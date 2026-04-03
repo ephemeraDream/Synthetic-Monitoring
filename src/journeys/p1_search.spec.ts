@@ -1,154 +1,234 @@
-import { test, expect } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { getCurrentTarget } from "../config/targets";
-import { closePopup, waitAndClosePopup } from "../utils/popup";
-import { attachNetworkSummary } from "../utils/network";
-import { injectVitalsScript } from "../utils/vitals";
-import { waitRandom } from "../utils/random";
-import { waitAndCloseJumpPopup } from "@/utils/jumpPopup";
+import { pick, LOCALES } from "../utils/random";
+import { installWebVitalsCollector } from "../utils/vitals";
+import {
+  attachJourneyEvidence,
+  closeSitePopups,
+  firstVisible,
+  isTemporaryErrorPage,
+  navigateByLocatorHref,
+  openSearchInput,
+  openStableStorefrontPage,
+  setupJourneyDiagnostics,
+  submitSearch,
+} from "../utils/storefrontJourney";
 
-/**
- * P1_SEARCH：搜索 Athena/Atlas -> 结果出现 -> 进入 PDP
- */
+type SearchCase = {
+  expectedPdpTitle: RegExp;
+  expectedResultText: RegExp;
+  resultSlugs: string[];
+  term: string;
+};
+
+const SEARCH_CASES: SearchCase[] = [
+  {
+    term: "Athena Pro",
+    resultSlugs: ["blacklyte-athena-pro-gaming-chair"],
+    expectedResultText: /Athena Pro Gaming Chair/i,
+    expectedPdpTitle: /Athena Pro Gaming Chair/i,
+  },
+  {
+    term: "Desk",
+    resultSlugs: ["blacklyte-atlas-lite-desk", "blacklyte-desk"],
+    expectedResultText: /Atlas Lite Standing Desk|Atlas Desk/i,
+    expectedPdpTitle: /Atlas Lite Standing Desk|Atlas Desk/i,
+  },
+];
+
+async function openSearchResultsPage(
+  page: Page,
+  baseUrl: string,
+  term: string,
+  isMobile: boolean,
+): Promise<void> {
+  const readyLocators = isMobile
+    ? [
+        page.locator(".header-mobile__item--search .header__search").first(),
+        page.locator(".header-mobile__item--search").first(),
+        page.locator(".header-mobile__item--search .header__search .header__icon").first(),
+        page.locator('a[href="/"]').first(),
+      ]
+    : [
+        page.locator('summary[aria-label="Search"]').first(),
+        page.locator(".header__search-full").first(),
+        page.locator('a[href="/"]').first(),
+      ];
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await openStableStorefrontPage(page, baseUrl, readyLocators, {
+      readyMessage: "首页核心入口未出现",
+      readyTimeout: 5000,
+    });
+
+    const searchInput = await openSearchInput(page, isMobile);
+    await submitSearch(page, searchInput, term, isMobile);
+
+    if (!(await isTemporaryErrorPage(page))) {
+      return;
+    }
+
+    await page.waitForTimeout(1000);
+  }
+
+  expect(
+    await isTemporaryErrorPage(page),
+    `${term} 搜索结果页仍然停留在站点错误页`,
+  ).toBeFalsy();
+}
+
+function buildExpectedProductUrl(caseConfig: SearchCase): RegExp {
+  return new RegExp(
+    `/products/(?:${caseConfig.resultSlugs.join("|")})(?:[/?#]|$)`,
+    "i",
+  );
+}
+
+async function assertSearchResults(
+  page: Page,
+  caseConfig: SearchCase,
+): Promise<Locator> {
+  const resultsHeading = await firstVisible(
+    [
+      page.locator("h1.page-header").filter({ hasText: new RegExp(caseConfig.term, "i") }).first(),
+      page.getByRole("heading", { name: /results found for/i }).first(),
+      page.locator("main h1").first(),
+    ],
+    10000,
+  );
+
+  const mainHasSearchSummary = await expect
+    .poll(
+      async () => {
+        const text = await page.locator("main").textContent().catch(() => null);
+        return (
+          /results found for/i.test(text ?? "") &&
+          new RegExp(caseConfig.term, "i").test(text ?? "")
+        );
+      },
+      {
+        timeout: 10000,
+        message: `${caseConfig.term} 搜索结果页未出现结果摘要`,
+      },
+    )
+    .toBeTruthy()
+    .then(() => true)
+    .catch(() => false);
+
+  expect(
+    resultsHeading !== null || mainHasSearchSummary,
+    `${caseConfig.term} 搜索结果标题未出现`,
+  ).toBeTruthy();
+
+  const visibleResultCount = await page
+    .locator("main a[href*='/products/']")
+    .evaluateAll((nodes) =>
+      nodes.filter(
+        (node) =>
+          node instanceof HTMLElement &&
+          !!(node.offsetWidth || node.offsetHeight || node.getClientRects().length),
+      ).length,
+    )
+    .catch(() => 0);
+  expect(visibleResultCount, `${caseConfig.term} 搜索结果没有可见商品链接`).toBeGreaterThan(0);
+
+  const resultLinkLocators = [
+    ...caseConfig.resultSlugs.map((slug) =>
+      page
+        .locator(`main a[href*="${slug}"]`)
+        .filter({ hasText: caseConfig.expectedResultText })
+        .first(),
+    ),
+    page
+      .locator("main a[href*='/products/']")
+      .filter({ hasText: caseConfig.expectedResultText })
+      .first(),
+  ];
+
+  const resultLink = await firstVisible(resultLinkLocators, 10000);
+  expect(resultLink, `${caseConfig.term} 未出现符合预期的搜索结果`).not.toBeNull();
+
+  return resultLink!;
+}
+
+async function openSearchResultPdp(
+  page: Page,
+  resultLink: Locator,
+  caseConfig: SearchCase,
+): Promise<void> {
+  await navigateByLocatorHref(page, resultLink, buildExpectedProductUrl(caseConfig), 15000);
+  await closeSitePopups(page);
+}
+
+async function assertSearchResultPdp(
+  page: Page,
+  caseConfig: SearchCase,
+): Promise<void> {
+  const productTitle = await firstVisible(
+    [
+      page
+        .locator(".product_info_new_product_title, .product_info_new_right_title, h1")
+        .filter({ hasText: caseConfig.expectedPdpTitle })
+        .first(),
+      page.locator("main").getByText(caseConfig.expectedPdpTitle).first(),
+    ],
+    10000,
+  );
+
+  const mainHasPdpTitle = await expect
+    .poll(
+      async () => {
+        const text = await page.locator("main").textContent().catch(() => null);
+        return caseConfig.expectedPdpTitle.test(text ?? "");
+      },
+      {
+        timeout: 10000,
+        message: `${caseConfig.term} PDP 主内容未出现预期标题`,
+      },
+    )
+    .toBeTruthy()
+    .then(() => true)
+    .catch(() => false);
+
+  expect(
+    productTitle !== null || mainHasPdpTitle,
+    `${caseConfig.term} PDP 标题未出现`,
+  ).toBeTruthy();
+}
+
 test.describe("P1_SEARCH - 搜索功能", () => {
   const target = getCurrentTarget();
 
-  // 测试的搜索关键词
-  const searchTerms = ["Athena Pro", "Desk"];
+  for (const searchCase of SEARCH_CASES) {
+    test(`搜索商品: ${searchCase.term}`, async ({ page, isMobile }, testInfo) => {
+      const diagnostics = setupJourneyDiagnostics(page);
+      let resultLink: Locator | null = null;
 
-  test.beforeEach(async ({ page }) => {
-    await injectVitalsScript(page);
+      await installWebVitalsCollector(page);
+      await page.setExtraHTTPHeaders({ "Accept-Language": pick(LOCALES) });
 
-    await page.goto(target.url, { waitUntil: "load" });
-    await waitAndCloseJumpPopup(page);
-    await waitAndClosePopup(page);
-  });
+      try {
+        await test.step("打开搜索框并提交搜索", async () => {
+          await openSearchResultsPage(page, target.url, searchCase.term, isMobile);
+        });
 
-  for (const searchTerm of searchTerms) {
-    test(`搜索商品: ${searchTerm}`, async ({ page, isMobile }) => {
-      if (isMobile) {
-        const searchIcon = page
-          .locator(".header-mobile__item--search .header__search .header__icon")
-          .first();
+        await test.step("搜索结果真实加载", async () => {
+          resultLink = await assertSearchResults(page, searchCase);
+        });
 
-        const searchForm = page.locator("#search-form-mobile");
+        await test.step("进入搜索结果 PDP", async () => {
+          expect(resultLink, `${searchCase.term} 搜索结果链接未准备好`).not.toBeNull();
+          await openSearchResultPdp(page, resultLink!, searchCase);
+        });
 
-        await searchIcon.click();
-
-        try {
-          await expect(searchForm).toBeVisible({ timeout: 3000 });
-        } catch {
-          // 如果没弹出，再点一次
-          await searchIcon.click();
-          await expect(searchForm).toBeVisible();
-        }
-
-        // 查找搜索框
-        const searchInput = page.locator("#Search-In-Modal-Sidebar").first();
-
-        await expect(searchInput).toBeVisible({ timeout: 10000 });
-
-        // 输入搜索关键词
-        await searchInput.fill(searchTerm);
-        await page.waitForTimeout(500);
-
-        // 提交搜索（按 Enter 或点击搜索按钮）
-        await searchInput.press("Enter");
-
-        // 或者点击搜索按钮
-        const searchButton = page
-          .getByRole("button", { name: /search|搜索/i })
-          .or(page.locator('button[type="submit"]'))
-          .first();
-        const hasSearchButton = await searchButton
-          .isVisible({ timeout: 2000 })
-          .catch(() => false);
-        if (hasSearchButton) {
-          await searchButton.click();
-        }
-      } else {
-        const searchIcon = page.locator(".header__search").first();
-        await searchIcon.click({ timeout: 10000 });
-
-        // 查找搜索框
-        const searchInput = page
-          .getByRole("searchbox")
-          .or(page.getByPlaceholder(/search|搜索/i))
-          .or(page.locator('input[type="search"]'))
-          .or(page.locator('[data-testid*="search"]'))
-          .first();
-
-        await expect(searchInput).toBeVisible({ timeout: 10000 });
-
-        // 输入搜索关键词
-        await searchInput.fill(searchTerm);
-        await page.waitForTimeout(500);
-
-        // 提交搜索（按 Enter 或点击搜索按钮）
-        await searchInput.press("Enter");
-
-        // 或者点击搜索按钮
-        const searchButton = page
-          .getByRole("button", { name: /search|搜索/i })
-          .or(page.locator('button[type="submit"]'))
-          .first();
-        const hasSearchButton = await searchButton
-          .isVisible({ timeout: 2000 })
-          .catch(() => false);
-        if (hasSearchButton) {
-          await searchButton.click();
-        }
+        await test.step("PDP 与搜索意图匹配", async () => {
+          await assertSearchResultPdp(page, searchCase);
+        });
+      } finally {
+        await test.step("收集关键证据", async () => {
+          await attachJourneyEvidence(page, testInfo, diagnostics);
+        });
       }
-
-      // 等待搜索结果页加载
-      await page
-        .waitForURL(/\/search|\/results?/i, { timeout: 10000 })
-        .catch(() => {});
-
-      // 验证搜索结果出现
-      const resultsContainer = page
-        .locator('.search-results, .results, [data-testid="search-results"]')
-        .first();
-      const hasResultsContainer = await resultsContainer
-        .isVisible({ timeout: 5000 })
-        .catch(() => false);
-
-      // 验证至少有一个结果项
-      const resultItem = page
-        .locator(
-          '.product-card, .search-result-item, [data-testid*="product"], .product_categories_product',
-        )
-        .first();
-      await expect(resultItem).toBeVisible({ timeout: 10000 });
-
-      // 验证搜索关键词在结果中（标题或描述）
-      const resultWithKeyword = page
-        .locator(
-          ".product-title, .result-title, h2, h3, .product_categories_product_title",
-        )
-        .filter({ hasText: new RegExp(searchTerm, "i") })
-        .first();
-      await expect(resultWithKeyword).toBeVisible({ timeout: 10000 });
-
-      // 点击第一个搜索结果进入 PDP
-      await resultItem.click();
-
-      // 等待进入商品详情页
-      await page
-        .waitForURL(/\/products?|\/p\//i, { timeout: 10000 })
-        .catch(() => {});
-
-      // 验证商品详情页
-      const productTitle = page
-        .locator(".product_info_new_product_title")
-        .first();
-      await expect(productTitle).toBeVisible({ timeout: 10000 });
-
-      // 验证标题包含搜索关键词（可选，因为可能有变体）
-      const titleText = await productTitle.textContent();
-      expect(titleText?.toLowerCase()).toContain(searchTerm.toLowerCase());
-
-      // 收集网络摘要
-      await attachNetworkSummary(page, test);
     });
   }
 });
