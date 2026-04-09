@@ -755,14 +755,20 @@ export async function attachJourneyEvidence(
   diagnostics: JourneyDiagnostics,
   priority: JourneyPriority = "P0",
 ): Promise<void> {
+  const shouldAttachExtendedEvidence = testInfo.status !== testInfo.expectedStatus;
+  const shouldAttachConsoleLogs =
+    shouldAttachExtendedEvidence || diagnostics.consoleErrors.length > 0;
+
   testInfo.attach("network-summary", {
     body: JSON.stringify(diagnostics.getNetworkSummary(), null, 2),
     contentType: "application/json",
   });
 
-  await attachHAR(page, testInfo);
+  if (shouldAttachExtendedEvidence) {
+    await attachHAR(page, testInfo);
+  }
 
-  if (diagnostics.consoleLogs.length > 0) {
+  if (shouldAttachConsoleLogs && diagnostics.consoleLogs.length > 0) {
     testInfo.attach("console-logs", {
       body: JSON.stringify(diagnostics.consoleLogs, null, 2),
       contentType: "application/json",
@@ -809,8 +815,9 @@ export async function attachJourneyEvidence(
       console.warn("无法读取 Web Vitals:", error);
     }
 
-    try {
-      const takeScreenshot = (fullPage: boolean, timeout: number) =>
+    if (shouldAttachExtendedEvidence) {
+      try {
+        const takeScreenshot = (fullPage: boolean, timeout: number) =>
         page.screenshot({
           fullPage,
           timeout,
@@ -841,14 +848,15 @@ export async function attachJourneyEvidence(
       console.warn("无法截取页面截图:", error);
     }
 
-    try {
-      const html = await page.content();
-      testInfo.attach("page-html", {
-        body: html,
-        contentType: "text/html",
-      });
-    } catch (error) {
+      try {
+        const html = await page.content();
+        testInfo.attach("page-html", {
+          body: html,
+          contentType: "text/html",
+        });
+      } catch (error) {
       console.warn("无法获取页面 HTML:", error);
+    }
     }
   }
 }
