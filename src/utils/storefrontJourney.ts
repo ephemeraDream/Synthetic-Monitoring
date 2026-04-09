@@ -4,16 +4,25 @@ import { attachHAR } from "./har";
 import { attachNetworkCollectors } from "./network";
 import { waitAndClosePopup } from "./popup";
 import { waitAndCloseJumpPopup } from "./jumpPopup";
-import { finalizeWebVitals } from "./vitals";
+import {
+  finalizeWebVitals,
+  snapshotWebVitals,
+  validateVitals,
+  type WebVitalsSnapshot,
+} from "./vitals";
 
 export const ATHENA_PRO_TITLE = "Athena Pro Gaming Chair";
 export const ATHENA_PRO_SLUG = "blacklyte-athena-pro-gaming-chair";
+export const DETERMINISTIC_ACCEPT_LANGUAGE = "en-US,en;q=0.9";
+
+export type JourneyPriority = keyof typeof VITALS_THRESHOLDS;
 
 export type JourneyDiagnostics = {
   getNetworkSummary: ReturnType<typeof attachNetworkCollectors>;
   consoleLogs: Array<{ type: string; text: string }>;
   consoleErrors: string[];
   failedRequests: Array<{ url: string; failure: string }>;
+  vitalsSnapshots: WebVitalsSnapshot[];
 };
 
 export type UrlWaitMatcher = RegExp | ((url: URL) => boolean);
@@ -49,7 +58,14 @@ export function setupJourneyDiagnostics(page: Page): JourneyDiagnostics {
     consoleLogs,
     consoleErrors,
     failedRequests,
+    vitalsSnapshots: [],
   };
+}
+
+export async function applyDeterministicJourneyHeaders(page: Page): Promise<void> {
+  await page.setExtraHTTPHeaders({
+    "Accept-Language": DETERMINISTIC_ACCEPT_LANGUAGE,
+  });
 }
 
 export async function closeSitePopups(
@@ -699,10 +715,45 @@ export async function goToCheckout(page: Page): Promise<void> {
   ).toBeTruthy();
 }
 
+function toAttachmentSlug(value: string): string {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+  return normalized || "snapshot";
+}
+
+function warnVitalsThresholds(
+  label: string,
+  snapshot: WebVitalsSnapshot,
+  priority: JourneyPriority,
+): void {
+  const result = validateVitals(snapshot.summary, VITALS_THRESHOLDS[priority]);
+
+  for (const failure of result.failures) {
+    console.warn(`[${label}] ${failure}`);
+  }
+}
+
+export async function captureJourneyVitalsCheckpoint(
+  page: Page,
+  diagnostics: JourneyDiagnostics,
+  label: string,
+  priority: JourneyPriority = "P0",
+): Promise<WebVitalsSnapshot> {
+  const snapshot = await snapshotWebVitals(page, label);
+  diagnostics.vitalsSnapshots.push(snapshot);
+  warnVitalsThresholds(label, snapshot, priority);
+  return snapshot;
+}
+
 export async function attachJourneyEvidence(
   page: Page,
   testInfo: TestInfo,
   diagnostics: JourneyDiagnostics,
+  priority: JourneyPriority = "P0",
 ): Promise<void> {
   testInfo.attach("network-summary", {
     body: JSON.stringify(diagnostics.getNetworkSummary(), null, 2),
@@ -734,35 +785,50 @@ export async function attachJourneyEvidence(
 
   if (!page.isClosed()) {
     try {
-      const vitals = await finalizeWebVitals(page);
+      if (diagnostics.vitalsSnapshots.length > 0) {
+        for (const snapshot of diagnostics.vitalsSnapshots) {
+          testInfo.attach(`web-vitals-${toAttachmentSlug(snapshot.label)}`, {
+            body: JSON.stringify(snapshot, null, 2),
+            contentType: "application/json",
+          });
+        }
+
+        testInfo.attach("web-vitals-checkpoints", {
+          body: JSON.stringify(diagnostics.vitalsSnapshots, null, 2),
+          contentType: "application/json",
+        });
+      }
+
+      const vitals = await finalizeWebVitals(page, "final-current-page");
       testInfo.attach("web-vitals", {
         body: JSON.stringify(vitals, null, 2),
         contentType: "application/json",
       });
-
-      if (vitals.lcp != null && vitals.lcp > VITALS_THRESHOLDS.P0.lcp) {
-        console.warn(`LCP ${vitals.lcp}ms > ${VITALS_THRESHOLDS.P0.lcp}ms`);
-      }
-      if (vitals.cls != null && vitals.cls > VITALS_THRESHOLDS.P0.cls) {
-        console.warn(`CLS ${vitals.cls} > ${VITALS_THRESHOLDS.P0.cls}`);
-      }
+      warnVitalsThresholds("final-current-page", vitals, priority);
     } catch (error) {
       console.warn("无法读取 Web Vitals:", error);
     }
 
     try {
-      let screenshot = await page
-        .screenshot({ fullPage: true })
+      const takeScreenshot = (fullPage: boolean, timeout: number) =>
+        page.screenshot({
+          fullPage,
+          timeout,
+          animations: "disabled",
+          caret: "hide",
+        });
+
+      let screenshot = await takeScreenshot(true, 15000)
         .catch(async (error) => {
           const message = error instanceof Error ? error.message : String(error);
           if (message.includes("32767 pixels")) {
             console.warn("全页截图过长，回退为视口截图");
-            return page.screenshot();
+            return takeScreenshot(false, 15000);
           }
 
           if (message.includes("Timeout")) {
             console.warn("全页截图超时，回退为视口截图");
-            return page.screenshot();
+            return takeScreenshot(false, 20000);
           }
 
           throw error;

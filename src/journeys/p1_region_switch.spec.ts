@@ -5,10 +5,11 @@ import {
   type Region,
   type TargetConfig,
 } from "../config/targets";
-import { pick, LOCALES } from "../utils/random";
 import { installWebVitalsCollector } from "../utils/vitals";
 import {
+  applyDeterministicJourneyHeaders,
   attachJourneyEvidence,
+  captureJourneyVitalsCheckpoint,
   closeSitePopups,
   firstVisible,
   isTemporaryErrorPage,
@@ -211,13 +212,19 @@ test.describe("P1_REGION_SWITCH - 区域切换", () => {
     let targetOption: Locator | null = null;
 
     await installWebVitalsCollector(page);
-    await page.setExtraHTTPHeaders({ "Accept-Language": pick(LOCALES) });
+    await applyDeterministicJourneyHeaders(page);
 
     try {
       await test.step("打开当前区域首页", async () => {
         await openStableStorefrontPage(page, currentTarget.url, undefined, {
           attempts: 2,
         });
+        await captureJourneyVitalsCheckpoint(
+          page,
+          diagnostics,
+          `home-${currentTarget.region.toLowerCase()}`,
+          "P1",
+        );
       });
 
       await test.step("找到真实区域切换入口", async () => {
@@ -233,10 +240,16 @@ test.describe("P1_REGION_SWITCH - 区域切换", () => {
 
       await test.step("目标区域站点正常加载", async () => {
         await assertRegionLanding(page, switchTarget, isMobile);
+        await captureJourneyVitalsCheckpoint(
+          page,
+          diagnostics,
+          `home-${switchTarget.region.toLowerCase()}`,
+          "P1",
+        );
       });
     } finally {
       await test.step("收集关键证据", async () => {
-        await attachJourneyEvidence(page, testInfo, diagnostics);
+        await attachJourneyEvidence(page, testInfo, diagnostics, "P1");
       });
     }
   });

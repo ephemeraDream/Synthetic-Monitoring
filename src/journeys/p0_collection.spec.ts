@@ -1,9 +1,10 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { getCurrentTarget } from "../config/targets";
-import { pick, LOCALES } from "../utils/random";
 import { installWebVitalsCollector } from "../utils/vitals";
 import {
+  applyDeterministicJourneyHeaders,
   attachJourneyEvidence,
+  captureJourneyVitalsCheckpoint,
   closeSitePopups,
   firstVisible,
   navigateByLocatorHref,
@@ -213,11 +214,12 @@ test.describe("P0_COLLECTION - 分类页列表", () => {
       const diagnostics = setupJourneyDiagnostics(page);
 
       await installWebVitalsCollector(page);
-      await page.setExtraHTTPHeaders({ "Accept-Language": pick(LOCALES) });
+      await applyDeterministicJourneyHeaders(page);
 
       try {
         await test.step("从首页进入 Products landing page", async () => {
           await openProductsLanding(page, target.url, isMobile);
+          await captureJourneyVitalsCheckpoint(page, diagnostics, "collections-landing");
         });
 
         await test.step(`进入 ${collection.name} 分类页`, async () => {
@@ -226,6 +228,11 @@ test.describe("P0_COLLECTION - 分类页列表", () => {
 
         await test.step(`${collection.name} 分类页列表真实加载`, async () => {
           await assertCollectionPage(page, collection);
+          await captureJourneyVitalsCheckpoint(
+            page,
+            diagnostics,
+            `collection-${collection.name.toLowerCase()}`,
+          );
         });
       } finally {
         await test.step("收集关键证据", async () => {

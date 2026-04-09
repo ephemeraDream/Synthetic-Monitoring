@@ -1,5 +1,18 @@
+import { fileURLToPath } from "node:url";
 import { type Page } from "@playwright/test";
 import { type VitalsThresholds } from "../config/vitals_thresholds";
+
+type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue | undefined };
+
+type MetricName = "CLS" | "FCP" | "INP" | "LCP" | "TTFB";
+
+type MetricRating = "good" | "needs-improvement" | "poor";
 
 type VitalsSupport = {
   cls: boolean;
@@ -10,22 +23,32 @@ type VitalsSupport = {
   ttfb: boolean;
 };
 
+export type WebVitalMetric = {
+  attribution?: Record<string, JsonValue | undefined>;
+  capturedAt: number;
+  delta: number;
+  entriesCount: number;
+  id: string;
+  name: MetricName;
+  navigationType?: string;
+  rating?: MetricRating | string;
+  value: number;
+};
+
 type BrowserVitalsState = {
   capturedAt: number;
-  cls: number;
-  fcp?: number;
   finalized: boolean;
-  inp?: number;
-  lcp?: number;
+  initializedAt: number;
+  metrics: Partial<Record<MetricName, WebVitalMetric>>;
   pageWasHidden: boolean;
+  snapshots: WebVitalsSnapshot[];
   supported: VitalsSupport;
-  ttfb?: number;
   version: number;
 };
 
 /**
- * Web Vitals 数据。
- * 额外保留 supported/capturedAt/finalized，方便排查采集是否真的生效。
+ * Web Vitals 汇总数据。
+ * 这里保留当前页最新指标值和原始 metric 明细，方便对齐 PSI/Lighthouse 口径。
  */
 export type WebVitals = {
   capturedAt?: number;
@@ -34,55 +57,72 @@ export type WebVitals = {
   finalized?: boolean;
   inp?: number;
   lcp?: number;
+  metrics?: Partial<Record<MetricName, WebVitalMetric>>;
+  navigationType?: string;
   pageWasHidden?: boolean;
   supported?: VitalsSupport;
   ttfb?: number;
 };
 
-type PaintEntry = PerformanceEntry & {
-  name: string;
-  startTime: number;
+/**
+ * 页面级 checkpoint 快照。
+ * 每个 label 都应该对应一个“页面稳定时刻”，而不是整个 Journey 末尾一把梭。
+ */
+export type WebVitalsSnapshot = {
+  capturedAt: number;
+  finalized: boolean;
+  label: string;
+  metrics?: Partial<Record<MetricName, WebVitalMetric>>;
+  summary: WebVitals;
+  title: string;
+  url: string;
 };
 
-type LayoutShiftEntry = PerformanceEntry & {
-  hadRecentInput?: boolean;
-  startTime: number;
-  value?: number;
+type BrowserWebVitalsApi = {
+  onCLS: (callback: (metric: BrowserMetricInput) => void, options?: Record<string, unknown>) => void;
+  onFCP: (callback: (metric: BrowserMetricInput) => void, options?: Record<string, unknown>) => void;
+  onINP: (callback: (metric: BrowserMetricInput) => void, options?: Record<string, unknown>) => void;
+  onLCP: (callback: (metric: BrowserMetricInput) => void, options?: Record<string, unknown>) => void;
+  onTTFB: (callback: (metric: BrowserMetricInput) => void, options?: Record<string, unknown>) => void;
 };
 
-type LargestContentfulPaintEntry = PerformanceEntry & {
-  loadTime?: number;
-  renderTime?: number;
-  startTime: number;
-};
-
-type InteractionTimingEntry = PerformanceEntry & {
-  duration?: number;
-  interactionId?: number;
-  processingEnd?: number;
-  startTime: number;
+type BrowserMetricInput = {
+  attribution?: Record<string, unknown>;
+  delta?: number;
+  entries?: unknown[];
+  id: string;
+  name: MetricName;
+  navigationType?: string;
+  rating?: string;
+  value: number;
 };
 
 type WindowWithVitals = Window &
   typeof globalThis & {
-    __vitals?: BrowserVitalsState;
-    __vitalsFinalize?: () => void;
-    __vitalsFlush?: () => void;
+    __journeyVitals?: BrowserVitalsState;
+    __journeyVitalsFinalize?: (label?: string) => WebVitalsSnapshot;
+    __journeyVitalsRead?: () => BrowserVitalsState;
+    __journeyVitalsReset?: () => void;
+    __journeyVitalsSnapshot?: (label: string) => WebVitalsSnapshot;
+    webVitals?: BrowserWebVitalsApi;
   };
-
-type ObserverInitWithThreshold = PerformanceObserverInit & {
-  durationThreshold?: number;
-};
 
 declare global {
   interface Window {
-    __vitals?: BrowserVitalsState;
-    __vitalsFinalize?: () => void;
-    __vitalsFlush?: () => void;
+    __journeyVitals?: BrowserVitalsState;
+    __journeyVitalsFinalize?: (label?: string) => WebVitalsSnapshot;
+    __journeyVitalsRead?: () => BrowserVitalsState;
+    __journeyVitalsReset?: () => void;
+    __journeyVitalsSnapshot?: (label: string) => WebVitalsSnapshot;
+    webVitals?: BrowserWebVitalsApi;
   }
 }
 
-const VITALS_COLLECTOR_VERSION = 2;
+const VITALS_COLLECTOR_VERSION = 3;
+const METRIC_NAMES: MetricName[] = ["CLS", "FCP", "INP", "LCP", "TTFB"];
+const WEB_VITALS_IIFE_PATH = fileURLToPath(
+  new URL("../../node_modules/web-vitals/dist/web-vitals.attribution.iife.js", import.meta.url),
+);
 
 function roundMetric(value: number | undefined, digits: number): number | undefined {
   if (value == null || !Number.isFinite(value)) {
@@ -92,17 +132,68 @@ function roundMetric(value: number | undefined, digits: number): number | undefi
   return Number(value.toFixed(digits));
 }
 
+function cloneMetric(metric: WebVitalMetric | undefined): WebVitalMetric | undefined {
+  if (!metric) {
+    return undefined;
+  }
+
+  return {
+    ...metric,
+    attribution: metric.attribution
+      ? JSON.parse(JSON.stringify(metric.attribution)) as Record<string, JsonValue | undefined>
+      : undefined,
+  };
+}
+
+function cloneMetrics(
+  metrics: Partial<Record<MetricName, WebVitalMetric>> | undefined,
+): Partial<Record<MetricName, WebVitalMetric>> | undefined {
+  if (!metrics) {
+    return undefined;
+  }
+
+  const cloned: Partial<Record<MetricName, WebVitalMetric>> = {};
+
+  for (const metricName of METRIC_NAMES) {
+    const metric = cloneMetric(metrics[metricName]);
+    if (metric) {
+      cloned[metricName] = metric;
+    }
+  }
+
+  return Object.keys(cloned).length > 0 ? cloned : undefined;
+}
+
+function pickNavigationType(
+  metrics: Partial<Record<MetricName, WebVitalMetric>> | undefined,
+): string | undefined {
+  if (!metrics) {
+    return undefined;
+  }
+
+  for (const metricName of ["LCP", "FCP", "CLS", "INP", "TTFB"] as MetricName[]) {
+    const navigationType = metrics[metricName]?.navigationType;
+    if (navigationType) {
+      return navigationType;
+    }
+  }
+
+  return undefined;
+}
+
 function toWebVitals(state: BrowserVitalsState | undefined): WebVitals {
   if (!state) {
     return {};
   }
 
   return {
-    lcp: state.supported.lcp ? roundMetric(state.lcp, 2) : undefined,
-    cls: state.supported.cls ? roundMetric(state.cls, 4) ?? 0 : undefined,
-    inp: state.supported.inp ? roundMetric(state.inp, 2) : undefined,
-    fcp: state.supported.fcp ? roundMetric(state.fcp, 2) : undefined,
-    ttfb: state.supported.ttfb ? roundMetric(state.ttfb, 2) : undefined,
+    lcp: roundMetric(state.metrics.LCP?.value, 2),
+    cls: roundMetric(state.metrics.CLS?.value, 4),
+    inp: roundMetric(state.metrics.INP?.value, 2),
+    fcp: roundMetric(state.metrics.FCP?.value, 2),
+    ttfb: roundMetric(state.metrics.TTFB?.value, 2),
+    metrics: cloneMetrics(state.metrics),
+    navigationType: pickNavigationType(state.metrics),
     supported: state.supported,
     capturedAt: roundMetric(state.capturedAt, 2),
     finalized: state.finalized,
@@ -110,21 +201,141 @@ function toWebVitals(state: BrowserVitalsState | undefined): WebVitals {
   };
 }
 
+function buildEmptySnapshot(label: string): WebVitalsSnapshot {
+  return {
+    label,
+    url: "",
+    title: "",
+    capturedAt: 0,
+    finalized: false,
+    summary: {},
+  };
+}
+
+async function readBrowserVitalsState(page: Page): Promise<BrowserVitalsState | undefined> {
+  if (page.isClosed()) {
+    return undefined;
+  }
+
+  return page.evaluate(() => {
+    const win = window as WindowWithVitals;
+    return win.__journeyVitalsRead?.();
+  });
+}
+
 /**
- * 在导航前注入 Web Vitals 采集器。
- * 重点修正点：
- * 1. CLS 使用 session window 计算，而不是简单累加。
- * 2. LCP 在 flush / hidden / pagehide 时都会补采最后记录。
- * 3. INP 按 interactionId 聚合，取每次交互的最大延迟，再取全局最大值。
+ * 在导航前注入官方 web-vitals attribution 采集器。
+ * 重点变化：
+ * 1. 改用官方实现，减少手写 observer 与 PSI/Lighthouse 口径漂移。
+ * 2. 保存当前页最新 metric + attribution，便于按页面 checkpoint 采集。
+ * 3. 提供 snapshot / finalize / reset 接口，支持 Journey 多页面分段记录。
  */
 export async function installWebVitalsCollector(page: Page): Promise<void> {
+  await page.addInitScript({ path: WEB_VITALS_IIFE_PATH });
+
   await page.addInitScript((collectorVersion: number) => {
+    type MetricName = "CLS" | "FCP" | "INP" | "LCP" | "TTFB";
+
+    type JsonValue =
+      | string
+      | number
+      | boolean
+      | null
+      | JsonValue[]
+      | { [key: string]: JsonValue | undefined };
+
+    type VitalsSupport = {
+      cls: boolean;
+      eventTiming: boolean;
+      fcp: boolean;
+      inp: boolean;
+      lcp: boolean;
+      ttfb: boolean;
+    };
+
+    type MetricInput = {
+      attribution?: Record<string, unknown>;
+      delta?: number;
+      entries?: unknown[];
+      id: string;
+      name: MetricName;
+      navigationType?: string;
+      rating?: string;
+      value: number;
+    };
+
+    type MetricRecord = {
+      attribution?: Record<string, JsonValue | undefined>;
+      capturedAt: number;
+      delta: number;
+      entriesCount: number;
+      id: string;
+      name: MetricName;
+      navigationType?: string;
+      rating?: string;
+      value: number;
+    };
+
+    type WebVitals = {
+      capturedAt?: number;
+      cls?: number;
+      fcp?: number;
+      finalized?: boolean;
+      inp?: number;
+      lcp?: number;
+      metrics?: Partial<Record<MetricName, MetricRecord>>;
+      navigationType?: string;
+      pageWasHidden?: boolean;
+      supported?: VitalsSupport;
+      ttfb?: number;
+    };
+
+    type Snapshot = {
+      capturedAt: number;
+      finalized: boolean;
+      label: string;
+      metrics?: Partial<Record<MetricName, MetricRecord>>;
+      summary: WebVitals;
+      title: string;
+      url: string;
+    };
+
+    type State = {
+      capturedAt: number;
+      finalized: boolean;
+      initializedAt: number;
+      metrics: Partial<Record<MetricName, MetricRecord>>;
+      pageWasHidden: boolean;
+      snapshots: Snapshot[];
+      supported: VitalsSupport;
+      version: number;
+    };
+
+    type WebVitalsApi = {
+      onCLS: (callback: (metric: MetricInput) => void, options?: Record<string, unknown>) => void;
+      onFCP: (callback: (metric: MetricInput) => void, options?: Record<string, unknown>) => void;
+      onINP: (callback: (metric: MetricInput) => void, options?: Record<string, unknown>) => void;
+      onLCP: (callback: (metric: MetricInput) => void, options?: Record<string, unknown>) => void;
+      onTTFB: (callback: (metric: MetricInput) => void, options?: Record<string, unknown>) => void;
+    };
+
+    type WindowWithVitals = Window &
+      typeof globalThis & {
+        __journeyVitals?: State;
+        __journeyVitalsFinalize?: (label?: string) => Snapshot;
+        __journeyVitalsRead?: () => State;
+        __journeyVitalsReset?: () => void;
+        __journeyVitalsSnapshot?: (label: string) => Snapshot;
+        webVitals?: WebVitalsApi;
+      };
+
     const win = window as WindowWithVitals;
 
-    if (win.__vitals?.version === collectorVersion) {
+    if (win.__journeyVitals?.version === collectorVersion) {
       return;
     }
 
+    const metricNames: MetricName[] = ["CLS", "FCP", "INP", "LCP", "TTFB"];
     const supportedEntryTypes =
       "PerformanceObserver" in win &&
       Array.isArray(win.PerformanceObserver.supportedEntryTypes)
@@ -140,245 +351,268 @@ export async function installWebVitalsCollector(page: Page): Promise<void> {
       ttfb: "PerformanceNavigationTiming" in win,
     };
 
-    const state: BrowserVitalsState = {
+    const now = () => performance.now();
+
+    const round = (value: number | undefined, digits: number): number | undefined => {
+      if (value == null || !Number.isFinite(value)) {
+        return undefined;
+      }
+
+      return Number(value.toFixed(digits));
+    };
+
+    const state: State = {
       version: collectorVersion,
-      lcp: undefined,
-      cls: 0,
-      inp: undefined,
-      fcp: undefined,
-      ttfb: undefined,
-      supported: support,
-      capturedAt: 0,
+      initializedAt: round(now(), 2) ?? 0,
+      capturedAt: round(now(), 2) ?? 0,
       finalized: false,
-      pageWasHidden: false,
+      pageWasHidden: document.visibilityState === "hidden",
+      supported: support,
+      metrics: {},
+      snapshots: [],
     };
 
-    win.__vitals = state;
-
-    const flushers: Array<() => void> = [];
-    const cleaners: Array<() => void> = [];
-
-    let clsWindowValue = 0;
-    let clsWindowEntries: LayoutShiftEntry[] = [];
-    const interactionLatencies = new Map<number, number>();
-
-    const updateCapturedAt = () => {
-      state.capturedAt = performance.now();
-    };
-
-    const updateTTFB = () => {
-      const navEntry = performance.getEntriesByType("navigation")[0] as
-        | PerformanceNavigationTiming
-        | undefined;
-
-      if (navEntry && navEntry.responseStart > 0) {
-        state.ttfb = navEntry.responseStart;
-      }
-    };
-
-    const updateFCPFromEntries = () => {
-      const paintEntries = performance.getEntriesByType("paint") as PaintEntry[];
-      const fcpEntry = paintEntries.find((entry) => entry.name === "first-contentful-paint");
-
-      if (fcpEntry) {
-        state.fcp = fcpEntry.startTime;
-      }
-    };
-
-    const handleLcpEntries = (entries: PerformanceEntry[]) => {
-      const typedEntries = entries as LargestContentfulPaintEntry[];
-      const lastEntry = typedEntries[typedEntries.length - 1];
-
-      if (!lastEntry) {
-        return;
+    const sanitizeObject = (
+      value: unknown,
+      depth = 0,
+      seen = new WeakSet<object>(),
+    ): JsonValue | undefined => {
+      if (value == null) {
+        return null;
       }
 
-      state.lcp =
-        lastEntry.startTime || lastEntry.renderTime || lastEntry.loadTime || state.lcp;
-      updateCapturedAt();
-    };
+      if (
+        typeof value === "string" ||
+        typeof value === "number" ||
+        typeof value === "boolean"
+      ) {
+        return value;
+      }
 
-    const handleClsEntries = (entries: PerformanceEntry[]) => {
-      const typedEntries = entries as LayoutShiftEntry[];
+      if (depth > 3) {
+        return undefined;
+      }
 
-      for (const entry of typedEntries) {
-        if (!entry || entry.hadRecentInput || entry.value == null) {
+      if (Array.isArray(value)) {
+        return value
+          .slice(0, 10)
+          .map((item) => sanitizeObject(item, depth + 1, seen))
+          .filter((item) => item !== undefined) as JsonValue[];
+      }
+
+      if (typeof value !== "object") {
+        return undefined;
+      }
+
+      if (seen.has(value)) {
+        return undefined;
+      }
+      seen.add(value);
+
+      const candidate = value as Record<string, unknown>;
+
+      if ("nodeType" in candidate && "nodeName" in candidate) {
+        return undefined;
+      }
+
+      const entryKeys = [
+        "name",
+        "entryType",
+        "startTime",
+        "duration",
+        "processingStart",
+        "processingEnd",
+        "renderTime",
+        "loadTime",
+        "size",
+        "url",
+        "value",
+        "hadRecentInput",
+        "interactionId",
+        "responseStart",
+        "requestStart",
+        "responseEnd",
+        "connectStart",
+        "connectEnd",
+        "domainLookupStart",
+        "domainLookupEnd",
+        "fetchStart",
+        "workerStart",
+        "activationStart",
+        "sourceURL",
+        "sourceFunctionName",
+        "invoker",
+      ];
+
+      const output: Record<string, JsonValue | undefined> = {};
+
+      for (const key of entryKeys) {
+        if (!(key in candidate)) {
           continue;
         }
 
-        const firstSessionEntry = clsWindowEntries[0];
-        const lastSessionEntry = clsWindowEntries[clsWindowEntries.length - 1];
-
-        if (
-          lastSessionEntry &&
-          firstSessionEntry &&
-          entry.startTime - lastSessionEntry.startTime < 1000 &&
-          entry.startTime - firstSessionEntry.startTime < 5000
-        ) {
-          clsWindowValue += entry.value;
-          clsWindowEntries.push(entry);
-        } else {
-          clsWindowValue = entry.value;
-          clsWindowEntries = [entry];
-        }
-
-        if (clsWindowValue > state.cls) {
-          state.cls = clsWindowValue;
+        const sanitized = sanitizeObject(candidate[key], depth + 1, seen);
+        if (sanitized !== undefined) {
+          output[key] = sanitized;
         }
       }
 
-      updateCapturedAt();
-    };
-
-    const handleInpEntries = (entries: PerformanceEntry[]) => {
-      const typedEntries = entries as InteractionTimingEntry[];
-
-      for (const entry of typedEntries) {
-        const interactionId = entry.interactionId ?? 0;
-        if (!interactionId) {
+      for (const [key, nestedValue] of Object.entries(candidate).slice(0, 20)) {
+        if (key in output) {
           continue;
         }
 
-        const candidateDuration = Math.max(
-          entry.duration ?? 0,
-          (entry.processingEnd ?? 0) - entry.startTime,
-        );
+        const sanitized = sanitizeObject(nestedValue, depth + 1, seen);
+        if (sanitized !== undefined) {
+          output[key] = sanitized;
+        }
+      }
 
-        if (candidateDuration <= 0) {
+      return Object.keys(output).length > 0 ? output : undefined;
+    };
+
+    const cloneMetrics = (): Partial<Record<MetricName, MetricRecord>> | undefined => {
+      const output: Partial<Record<MetricName, MetricRecord>> = {};
+
+      for (const metricName of metricNames) {
+        const metric = state.metrics[metricName];
+        if (!metric) {
           continue;
         }
 
-        const previousInteractionDuration = interactionLatencies.get(interactionId) ?? 0;
-        if (candidateDuration > previousInteractionDuration) {
-          interactionLatencies.set(interactionId, candidateDuration);
+        output[metricName] = {
+          ...metric,
+          attribution: metric.attribution
+            ? JSON.parse(JSON.stringify(metric.attribution)) as Record<string, JsonValue | undefined>
+            : undefined,
+        };
+      }
+
+      return Object.keys(output).length > 0 ? output : undefined;
+    };
+
+    const pickNavigationType = (): string | undefined => {
+      for (const metricName of ["LCP", "FCP", "CLS", "INP", "TTFB"] as MetricName[]) {
+        const navigationType = state.metrics[metricName]?.navigationType;
+        if (navigationType) {
+          return navigationType;
         }
-
-        const currentInp = state.inp ?? 0;
-        if (candidateDuration > currentInp) {
-          state.inp = candidateDuration;
-        }
       }
 
-      updateCapturedAt();
+      return undefined;
     };
 
-    const observeEntries = (
-      handler: (entries: PerformanceEntry[]) => void,
-      options: PerformanceObserverInit | ObserverInitWithThreshold,
-    ) => {
-      const observer = new PerformanceObserver((list) => {
-        handler(list.getEntries());
-      });
-
-      observer.observe(options as PerformanceObserverInit);
-
-      flushers.push(() => {
-        handler(observer.takeRecords());
-      });
-
-      cleaners.push(() => {
-        observer.disconnect();
-      });
-    };
-
-    const flush = () => {
-      updateTTFB();
-      updateFCPFromEntries();
-
-      for (const flusher of flushers) {
-        flusher();
-      }
-
-      updateCapturedAt();
-    };
-
-    const finalize = () => {
-      if (state.finalized) {
-        return;
-      }
-
-      state.pageWasHidden = document.visibilityState === "hidden" || state.pageWasHidden;
-      flush();
-
-      for (const cleanup of cleaners) {
-        cleanup();
-      }
-
-      state.finalized = true;
-      updateCapturedAt();
-    };
-
-    win.__vitalsFlush = flush;
-    win.__vitalsFinalize = finalize;
-
-    updateTTFB();
-    updateFCPFromEntries();
-
-    if (support.lcp) {
-      observeEntries(handleLcpEntries, {
-        type: "largest-contentful-paint",
-        buffered: true,
-      });
-    }
-
-    if (support.cls) {
-      observeEntries(handleClsEntries, {
-        type: "layout-shift",
-        buffered: true,
-      });
-    }
-
-    if (support.inp) {
-      const eventObserverOptions: ObserverInitWithThreshold = {
-        type: "event",
-        buffered: true,
-        durationThreshold: 16,
-      };
-      observeEntries(handleInpEntries, eventObserverOptions);
-    }
-
-    const onHidden = () => {
-      if (document.visibilityState === "hidden") {
-        state.pageWasHidden = true;
-        finalize();
-      }
-    };
-
-    const onPageHide = () => {
-      state.pageWasHidden = true;
-      finalize();
-    };
-
-    document.addEventListener("visibilitychange", onHidden, true);
-    win.addEventListener("pagehide", onPageHide, true);
-
-    cleaners.push(() => {
-      document.removeEventListener("visibilitychange", onHidden, true);
-      win.removeEventListener("pagehide", onPageHide, true);
+    const buildSummary = (): WebVitals => ({
+      lcp: round(state.metrics.LCP?.value, 2),
+      cls: round(state.metrics.CLS?.value, 4),
+      inp: round(state.metrics.INP?.value, 2),
+      fcp: round(state.metrics.FCP?.value, 2),
+      ttfb: round(state.metrics.TTFB?.value, 2),
+      metrics: cloneMetrics(),
+      navigationType: pickNavigationType(),
+      supported: state.supported,
+      capturedAt: round(state.capturedAt, 2),
+      finalized: state.finalized,
+      pageWasHidden: state.pageWasHidden,
     });
 
-    updateCapturedAt();
+    const buildSnapshot = (label: string): Snapshot => ({
+      label,
+      url: location.href,
+      title: document.title,
+      capturedAt: round(state.capturedAt, 2) ?? 0,
+      finalized: state.finalized,
+      summary: buildSummary(),
+      metrics: cloneMetrics(),
+    });
+
+    const updateMetric = (metric: MetricInput) => {
+      if (!metric?.name || !Number.isFinite(metric.value)) {
+        return;
+      }
+
+      state.metrics[metric.name] = {
+        name: metric.name,
+        id: metric.id,
+        value: round(metric.value, 4) ?? metric.value,
+        delta: round(metric.delta ?? metric.value, 4) ?? metric.value,
+        rating: metric.rating,
+        navigationType: metric.navigationType,
+        entriesCount: Array.isArray(metric.entries) ? metric.entries.length : 0,
+        attribution: sanitizeObject(metric.attribution) as Record<string, JsonValue | undefined> | undefined,
+        capturedAt: round(now(), 2) ?? 0,
+      };
+      state.capturedAt = round(now(), 2) ?? 0;
+    };
+
+    const snapshot = (label: string) => {
+      state.capturedAt = round(now(), 2) ?? 0;
+      const current = buildSnapshot(label);
+      state.snapshots.push(current);
+      return current;
+    };
+
+    const reset = () => {
+      state.initializedAt = round(now(), 2) ?? 0;
+      state.capturedAt = state.initializedAt;
+      state.finalized = false;
+      state.pageWasHidden = document.visibilityState === "hidden";
+      state.metrics = {};
+      state.snapshots = [];
+    };
+
+    win.__journeyVitals = state;
+    win.__journeyVitalsRead = () => state;
+    win.__journeyVitalsSnapshot = snapshot;
+    win.__journeyVitalsFinalize = (label = "final") => {
+      state.pageWasHidden = state.pageWasHidden || document.visibilityState === "hidden";
+      state.finalized = true;
+      return snapshot(label);
+    };
+    win.__journeyVitalsReset = reset;
+
+    document.addEventListener(
+      "visibilitychange",
+      () => {
+        if (document.visibilityState === "hidden") {
+          state.pageWasHidden = true;
+        }
+      },
+      true,
+    );
+
+    win.addEventListener(
+      "pagehide",
+      () => {
+        state.pageWasHidden = true;
+      },
+      true,
+    );
+
+    const api = win.webVitals;
+    if (!api) {
+      return;
+    }
+
+    api.onCLS(updateMetric, { reportAllChanges: true });
+    api.onLCP(updateMetric, { reportAllChanges: true });
+    api.onFCP(updateMetric);
+    api.onTTFB(updateMetric);
+    api.onINP(updateMetric, {
+      reportAllChanges: true,
+      durationThreshold: 40,
+    });
   }, VITALS_COLLECTOR_VERSION);
 }
 
 /**
- * 读取当前 Web Vitals 快照。
- * 这里会先 flush 已缓存的 observer 记录，但不会强制 finalize，
- * 这样中途读取也不会中断后续采集。
+ * 读取当前页当前时刻的最新 Web Vitals 汇总值。
+ * 适合调试或兼容旧接口，不适合 Journey 末尾一把梭地当成整条链路指标。
  */
 export async function readWebVitals(page: Page): Promise<WebVitals> {
   try {
-    if (page.isClosed()) {
-      return {};
-    }
-
-    const vitals = await page.evaluate(() => {
-      const win = window as WindowWithVitals;
-      win.__vitalsFlush?.();
-      return win.__vitals;
-    });
-
-    return toWebVitals(vitals ?? undefined);
+    const vitalsState = await readBrowserVitalsState(page);
+    return toWebVitals(vitalsState);
   } catch (error) {
     console.warn("无法获取 Web Vitals:", error);
     return {};
@@ -386,25 +620,71 @@ export async function readWebVitals(page: Page): Promise<WebVitals> {
 }
 
 /**
- * 在确实要结束采集时，可显式 finalize 再读取。
- * 当前主流程不用强依赖，但保留这个接口方便后续扩展。
+ * 对当前页做一个 checkpoint 快照。
+ * label 应该是页面语义，例如 home / search-results / pdp / cart / checkout。
  */
-export async function finalizeWebVitals(page: Page): Promise<WebVitals> {
+export async function snapshotWebVitals(
+  page: Page,
+  label: string,
+): Promise<WebVitalsSnapshot> {
   try {
     if (page.isClosed()) {
-      return {};
+      return buildEmptySnapshot(label);
     }
 
-    const vitals = await page.evaluate(() => {
+    const snapshot = await page.evaluate((snapshotLabel: string) => {
       const win = window as WindowWithVitals;
-      win.__vitalsFinalize?.();
-      return win.__vitals;
-    });
+      return win.__journeyVitalsSnapshot?.(snapshotLabel);
+    }, label);
 
-    return toWebVitals(vitals ?? undefined);
+    return snapshot ?? buildEmptySnapshot(label);
+  } catch (error) {
+    console.warn("无法生成 Web Vitals checkpoint:", error);
+    return buildEmptySnapshot(label);
+  }
+}
+
+/**
+ * 结束当前页采集并读取最终快照。
+ * 这个“最终”只代表当前页，不代表整个 Journey 的所有页面。
+ */
+export async function finalizeWebVitals(
+  page: Page,
+  label = "final",
+): Promise<WebVitalsSnapshot> {
+  try {
+    if (page.isClosed()) {
+      return buildEmptySnapshot(label);
+    }
+
+    const snapshot = await page.evaluate((snapshotLabel: string) => {
+      const win = window as WindowWithVitals;
+      return win.__journeyVitalsFinalize?.(snapshotLabel);
+    }, label);
+
+    return snapshot ?? buildEmptySnapshot(label);
   } catch (error) {
     console.warn("无法 finalize Web Vitals:", error);
-    return {};
+    return buildEmptySnapshot(label);
+  }
+}
+
+/**
+ * 在同一文档内需要重新开始统计时，可显式 reset。
+ * 当前多页 Journey 主要依赖导航自动重建文档，这个接口先留给后续 SPA 扩展。
+ */
+export async function resetWebVitalsSession(page: Page): Promise<void> {
+  try {
+    if (page.isClosed()) {
+      return;
+    }
+
+    await page.evaluate(() => {
+      const win = window as WindowWithVitals;
+      win.__journeyVitalsReset?.();
+    });
+  } catch (error) {
+    console.warn("无法 reset Web Vitals:", error);
   }
 }
 

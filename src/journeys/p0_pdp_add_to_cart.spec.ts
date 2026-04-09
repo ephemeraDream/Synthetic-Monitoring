@@ -1,12 +1,13 @@
 import { test } from "@playwright/test";
 import { getCurrentTarget } from "../config/targets";
-import { pick, LOCALES } from "../utils/random";
 import { installWebVitalsCollector } from "../utils/vitals";
 import {
   addCurrentProductToCart,
+  applyDeterministicJourneyHeaders,
   ATHENA_PRO_SLUG,
   ATHENA_PRO_TITLE,
   attachJourneyEvidence,
+  captureJourneyVitalsCheckpoint,
   goToCart,
   openProductPdp,
   openStorefrontPage,
@@ -20,13 +21,14 @@ test.describe("P0_PDP_ADD_TO_CART - 商品加购", () => {
     const diagnostics = setupJourneyDiagnostics(page);
 
     await installWebVitalsCollector(page);
-    await page.setExtraHTTPHeaders({ "Accept-Language": pick(LOCALES) });
+    await applyDeterministicJourneyHeaders(page);
 
     try {
       await openStorefrontPage(page, target.url);
 
       await test.step("进入 Athena Pro 商品详情页", async () => {
         await openProductPdp(page, target.url, ATHENA_PRO_SLUG, ATHENA_PRO_TITLE);
+        await captureJourneyVitalsCheckpoint(page, diagnostics, "pdp");
       });
 
       await test.step("PDP 加购成功", async () => {
@@ -35,6 +37,7 @@ test.describe("P0_PDP_ADD_TO_CART - 商品加购", () => {
 
       await test.step("进入购物车确认商品已加入", async () => {
         await goToCart(page, isMobile);
+        await captureJourneyVitalsCheckpoint(page, diagnostics, "cart");
       });
     } finally {
       await test.step("收集关键证据", async () => {

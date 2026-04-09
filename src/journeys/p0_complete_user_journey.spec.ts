@@ -1,12 +1,13 @@
 import { expect, test, type Locator } from "@playwright/test";
 import { getCurrentTarget } from "../config/targets";
-import { pick, LOCALES } from "../utils/random";
 import { installWebVitalsCollector } from "../utils/vitals";
 import {
   addCurrentProductToCart,
+  applyDeterministicJourneyHeaders,
   ATHENA_PRO_SLUG,
   ATHENA_PRO_TITLE,
   attachJourneyEvidence,
+  captureJourneyVitalsCheckpoint,
   closeSitePopups,
   firstVisible,
   goToCart,
@@ -27,7 +28,7 @@ test.describe("P0_COMPLETE_USER_JOURNEY - 完整用户旅程", () => {
     const diagnostics = setupJourneyDiagnostics(page);
 
     await installWebVitalsCollector(page);
-    await page.setExtraHTTPHeaders({ "Accept-Language": pick(LOCALES) });
+    await applyDeterministicJourneyHeaders(page);
 
     try {
       await openStorefrontPage(page, target.url);
@@ -54,6 +55,8 @@ test.describe("P0_COMPLETE_USER_JOURNEY - 完整用户旅程", () => {
           5000,
         );
         expect(cartLink, "首页购物车入口未出现").not.toBeNull();
+
+        await captureJourneyVitalsCheckpoint(page, diagnostics, "home");
       });
 
       await test.step("搜索 Athena Pro 并进入商品详情页", async () => {
@@ -84,6 +87,8 @@ test.describe("P0_COMPLETE_USER_JOURNEY - 完整用户旅程", () => {
         );
         expect(resultLink, "未找到 Athena Pro 搜索结果").not.toBeNull();
 
+        await captureJourneyVitalsCheckpoint(page, diagnostics, "search-results");
+
         await navigateByLocatorHref(
           page,
           resultLink!,
@@ -103,6 +108,8 @@ test.describe("P0_COMPLETE_USER_JOURNEY - 完整用户旅程", () => {
           10000,
         );
         expect(productTitle, "PDP 标题未出现").not.toBeNull();
+
+        await captureJourneyVitalsCheckpoint(page, diagnostics, "pdp");
       });
 
       await test.step("PDP 加购成功", async () => {
@@ -111,10 +118,12 @@ test.describe("P0_COMPLETE_USER_JOURNEY - 完整用户旅程", () => {
 
       await test.step("进入购物车", async () => {
         await goToCart(page, isMobile);
+        await captureJourneyVitalsCheckpoint(page, diagnostics, "cart");
       });
 
       await test.step("进入 checkout", async () => {
         await goToCheckout(page);
+        await captureJourneyVitalsCheckpoint(page, diagnostics, "checkout");
       });
     } finally {
       await test.step("收集关键证据", async () => {

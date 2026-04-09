@@ -1,9 +1,10 @@
 import { expect, test, type Locator } from "@playwright/test";
 import { getCurrentTarget } from "../config/targets";
-import { pick, LOCALES } from "../utils/random";
 import { installWebVitalsCollector } from "../utils/vitals";
 import {
+  applyDeterministicJourneyHeaders,
   attachJourneyEvidence,
+  captureJourneyVitalsCheckpoint,
   closeMobileMenu,
   firstVisible,
   openMobileMenu,
@@ -18,7 +19,7 @@ test.describe("P0_HOME - 首页核心功能", () => {
     const diagnostics = setupJourneyDiagnostics(page);
 
     await installWebVitalsCollector(page);
-    await page.setExtraHTTPHeaders({ "Accept-Language": pick(LOCALES) });
+    await applyDeterministicJourneyHeaders(page);
 
     try {
       await openStorefrontPage(page, target.url);
@@ -72,6 +73,8 @@ test.describe("P0_HOME - 首页核心功能", () => {
           10000,
         );
         expect(heroHeading, "首页核心内容区未出现").not.toBeNull();
+
+        await captureJourneyVitalsCheckpoint(page, diagnostics, "home");
       });
 
       await test.step("导航入口可用", async () => {

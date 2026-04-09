@@ -1,9 +1,10 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { getCurrentTarget } from "../config/targets";
-import { pick, LOCALES } from "../utils/random";
 import { installWebVitalsCollector } from "../utils/vitals";
 import {
+  applyDeterministicJourneyHeaders,
   attachJourneyEvidence,
+  captureJourneyVitalsCheckpoint,
   closeSitePopups,
   firstVisible,
   isTemporaryErrorPage,
@@ -203,9 +204,10 @@ test.describe("P1_SEARCH - 搜索功能", () => {
     test(`搜索商品: ${searchCase.term}`, async ({ page, isMobile }, testInfo) => {
       const diagnostics = setupJourneyDiagnostics(page);
       let resultLink: Locator | null = null;
+      const labelSuffix = searchCase.resultSlugs[0] ?? searchCase.term.toLowerCase();
 
       await installWebVitalsCollector(page);
-      await page.setExtraHTTPHeaders({ "Accept-Language": pick(LOCALES) });
+      await applyDeterministicJourneyHeaders(page);
 
       try {
         await test.step("打开搜索框并提交搜索", async () => {
@@ -214,6 +216,12 @@ test.describe("P1_SEARCH - 搜索功能", () => {
 
         await test.step("搜索结果真实加载", async () => {
           resultLink = await assertSearchResults(page, searchCase);
+          await captureJourneyVitalsCheckpoint(
+            page,
+            diagnostics,
+            `search-results-${labelSuffix}`,
+            "P1",
+          );
         });
 
         await test.step("进入搜索结果 PDP", async () => {
@@ -223,10 +231,11 @@ test.describe("P1_SEARCH - 搜索功能", () => {
 
         await test.step("PDP 与搜索意图匹配", async () => {
           await assertSearchResultPdp(page, searchCase);
+          await captureJourneyVitalsCheckpoint(page, diagnostics, `pdp-${labelSuffix}`, "P1");
         });
       } finally {
         await test.step("收集关键证据", async () => {
-          await attachJourneyEvidence(page, testInfo, diagnostics);
+          await attachJourneyEvidence(page, testInfo, diagnostics, "P1");
         });
       }
     });
