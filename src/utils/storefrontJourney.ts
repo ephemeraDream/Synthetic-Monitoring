@@ -22,6 +22,7 @@ export type JourneyDiagnostics = {
   consoleLogs: Array<{ type: string; text: string }>;
   consoleErrors: string[];
   failedRequests: Array<{ url: string; failure: string }>;
+  pageCrashed: boolean;
   vitalsSnapshots: WebVitalsSnapshot[];
 };
 
@@ -32,6 +33,7 @@ export function setupJourneyDiagnostics(page: Page): JourneyDiagnostics {
   const consoleErrors: string[] = [];
   const failedRequests: Array<{ url: string; failure: string }> = [];
   const getNetworkSummary = attachNetworkCollectors(page);
+  let pageCrashed = false;
 
   page.on("console", (msg) => {
     const entry = { type: msg.type(), text: msg.text() };
@@ -53,11 +55,19 @@ export function setupJourneyDiagnostics(page: Page): JourneyDiagnostics {
     });
   });
 
+  page.on("crash", () => {
+    pageCrashed = true;
+    consoleErrors.push("Page crashed");
+  });
+
   return {
     getNetworkSummary,
     consoleLogs,
     consoleErrors,
     failedRequests,
+    get pageCrashed() {
+      return pageCrashed;
+    },
     vitalsSnapshots: [],
   };
 }
@@ -281,27 +291,47 @@ export async function navigateByLocatorHref(
 }
 
 export async function openMobileMenu(page: Page): Promise<void> {
-  const menuButton = await firstVisible(
-    [
-      page.getByRole("button", { name: /menu/i }),
-      page.locator(".mobileMenu-toggle"),
-      page.locator('button[aria-label*="menu" i]'),
-    ],
-    5000,
-  );
+  const menuButtonLocators = [
+    page.getByRole("button", { name: /menu/i }),
+    page.locator('button[aria-label*="menu" i]'),
+    page.locator('summary[aria-label*="menu" i]'),
+    page.locator(".mobileMenu-toggle"),
+    page.locator(".header-mobile__item--menu button"),
+    page.locator(".header-mobile__item--menu"),
+  ];
+  const menuReadyLocators = [
+    page.getByText(/^Menu$/).first(),
+    page.getByRole("link", { name: /Sign In/i }).first(),
+    page.locator(".halo-sidebar_menu, #navigation-mobile").first(),
+  ];
+
+  await expect(page.locator("main")).toBeVisible({ timeout: 10000 }).catch(() => {});
+
+  let menuButton = await firstVisible(menuButtonLocators, 3000);
+  if (!menuButton) {
+    await closeSitePopups(page, 800);
+    await page.waitForTimeout(500);
+    menuButton = await firstVisible(menuButtonLocators, 5000);
+  }
+
   expect(menuButton, "移动端未找到 menu 按钮").not.toBeNull();
 
-  await menuButton!.click({ force: true });
+  const tryOpenMenu = async (): Promise<boolean> => {
+    await menuButton!.scrollIntoViewIfNeeded().catch(() => {});
+    await menuButton!.click({ force: true }).catch(() => {});
+    const menuReady = await firstVisible(menuReadyLocators, 5000);
+    return menuReady !== null;
+  };
 
-  const menuReady = await firstVisible(
-    [
-      page.getByText(/^Menu$/).first(),
-      page.getByRole("link", { name: /Sign In/i }).first(),
-      page.locator(".halo-sidebar_menu, #navigation-mobile").first(),
-    ],
-    8000,
-  );
-  expect(menuReady, "移动端菜单未成功展开").not.toBeNull();
+  let opened = await tryOpenMenu();
+  if (!opened) {
+    await closeSitePopups(page, 800);
+    await page.waitForTimeout(500);
+    menuButton = await firstVisible(menuButtonLocators, 3000) ?? menuButton;
+    opened = await tryOpenMenu();
+  }
+
+  expect(opened, "移动端菜单未成功展开").toBeTruthy();
 }
 
 export async function closeMobileMenu(page: Page): Promise<void> {
@@ -805,28 +835,31 @@ export async function attachJourneyEvidence(
         });
       }
 
-      const vitals = await finalizeWebVitals(page, "final-current-page");
-      testInfo.attach("web-vitals", {
-        body: JSON.stringify(vitals, null, 2),
-        contentType: "application/json",
-      });
-      warnVitalsThresholds("final-current-page", vitals, priority);
+      if (!diagnostics.pageCrashed) {
+        const vitals = await finalizeWebVitals(page, "final-current-page");
+        testInfo.attach("web-vitals", {
+          body: JSON.stringify(vitals, null, 2),
+          contentType: "application/json",
+        });
+        warnVitalsThresholds("final-current-page", vitals, priority);
+      } else {
+        console.warn("页面已 crash，跳过最终 Web Vitals 采集");
+      }
     } catch (error) {
       console.warn("无法读取 Web Vitals:", error);
     }
 
-    if (shouldAttachExtendedEvidence) {
+    if (shouldAttachExtendedEvidence && !diagnostics.pageCrashed) {
       try {
         const takeScreenshot = (fullPage: boolean, timeout: number) =>
-        page.screenshot({
-          fullPage,
-          timeout,
-          animations: "disabled",
-          caret: "hide",
-        });
+          page.screenshot({
+            fullPage,
+            timeout,
+            animations: "disabled",
+            caret: "hide",
+          });
 
-      let screenshot = await takeScreenshot(true, 15000)
-        .catch(async (error) => {
+        const screenshot = await takeScreenshot(true, 15000).catch(async (error) => {
           const message = error instanceof Error ? error.message : String(error);
           if (message.includes("32767 pixels")) {
             console.warn("全页截图过长，回退为视口截图");
@@ -840,13 +873,13 @@ export async function attachJourneyEvidence(
 
           throw error;
         });
-      testInfo.attach("final-screenshot", {
-        body: screenshot,
-        contentType: "image/png",
-      });
-    } catch (error) {
-      console.warn("无法截取页面截图:", error);
-    }
+        testInfo.attach("final-screenshot", {
+          body: screenshot,
+          contentType: "image/png",
+        });
+      } catch (error) {
+        console.warn("无法截取页面截图:", error);
+      }
 
       try {
         const html = await page.content();
@@ -855,8 +888,8 @@ export async function attachJourneyEvidence(
           contentType: "text/html",
         });
       } catch (error) {
-      console.warn("无法获取页面 HTML:", error);
-    }
+        console.warn("无法获取页面 HTML:", error);
+      }
     }
   }
 }

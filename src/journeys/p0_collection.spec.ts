@@ -9,7 +9,7 @@ import {
   firstVisible,
   navigateByLocatorHref,
   openMobileMenu,
-  openStorefrontPage,
+  openStableStorefrontPage,
   setupJourneyDiagnostics,
 } from "../utils/storefrontJourney";
 
@@ -50,7 +50,28 @@ async function openProductsLanding(
   baseUrl: string,
   isMobile: boolean,
 ): Promise<void> {
-  await openStorefrontPage(page, baseUrl);
+  const mobileReadyLocators = [
+    page.getByRole("button", { name: /menu/i }),
+    page.locator('button[aria-label*="menu" i]'),
+    page.locator(".mobileMenu-toggle"),
+    page.locator('a[href="/"]'),
+  ];
+  const desktopReadyLocators = [
+    page.locator("header nav").first(),
+    page.locator('a[href="/pages/collections"]').filter({ hasText: /^Products$/i }).first(),
+    page.locator('a[href="/"]').first(),
+  ];
+
+  await openStableStorefrontPage(
+    page,
+    baseUrl,
+    isMobile ? mobileReadyLocators : desktopReadyLocators,
+    {
+      attempts: 3,
+      readyMessage: "首页导航入口未出现",
+      readyTimeout: 8000,
+    },
+  );
 
   const productsLink = isMobile
     ? await (async () => {
