@@ -10,6 +10,8 @@ export async function closePopup(
 ): Promise<boolean> {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
+      let clickedCloseAction = false;
+
       // 尝试多种关闭方式
       const closeSelectors = [
         // 通用关闭按钮
@@ -37,16 +39,13 @@ export async function closePopup(
           if (await element.isVisible({ timeout: 1000 })) {
             await element.click({ timeout: 2000 });
             await page.waitForTimeout(500); // 等待动画
-            continue;
+            clickedCloseAction = true;
+            break;
           }
         } catch {
           // 继续尝试下一个选择器
         }
       }
-
-      // 尝试按 Escape 键
-      await page.keyboard.press("Escape");
-      await page.waitForTimeout(500);
 
       // 检查弹窗是否还存在
       const modalVisible = await page
@@ -56,6 +55,11 @@ export async function closePopup(
         .catch(() => false);
       if (!modalVisible) {
         return true; // 成功关闭
+      }
+
+      if (!clickedCloseAction) {
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(500);
       }
     } catch (error) {
       // 继续尝试

@@ -1,73 +1,71 @@
-import { test, expect } from '@playwright/test';
-import { TARGETS, TargetKey } from '../config/targets';
-import { CAMPAIGNS, isExpired } from '../config/campaigns';
-import { closeMarketingPopups } from '../utils/popup';
-import { attachNetworkCollectors } from '../utils/network';
-import { jitterMs, pick, LOCALES } from '../utils/random';
+import { expect, test } from "@playwright/test";
+import { CAMPAIGNS, isExpired } from "../config/campaigns";
+import { getCurrentTarget } from "../config/targets";
+import { installWebVitalsCollector } from "../utils/vitals";
+import {
+  applyDeterministicJourneyHeaders,
+  attachJourneyEvidence,
+  buildStorefrontUrl,
+  captureJourneyVitalsCheckpoint,
+  openStableStorefrontPage,
+  setupJourneyDiagnostics,
+} from "../utils/storefrontJourney";
 
 /**
- * P0_CAMPAIGN_PAGE：活动页监控模板（参考模板版本）
- * 自动过期策略：过期后自动 skip 测试，避免误报
- * 
- * 上线策略：活动期间设为 P0；到期自动 skip，不影响主监控体系
+ * P0_CAMPAIGN_PAGE：活动页监控模板
+ *
+ * 上线策略：
+ * - 活动进行中可作为 P0 使用。
+ * - 到期后自动 skip，避免活动下线引发误报。
  */
-test('P0_CAMPAIGN_PAGE', async ({ page }, testInfo) => {
-  const target: TargetKey = (process.env.TARGET as TargetKey) || 'US';
-  const base = TARGETS[target].url;
+test("P0_CAMPAIGN_PAGE", async ({ page }, testInfo) => {
+  const target = getCurrentTarget();
+  const diagnostics = setupJourneyDiagnostics(page);
+  const campaignName = process.env.CAMPAIGN || "CHRISTMAS_SALE";
+  const campaign = CAMPAIGNS.find((item) => item.name === campaignName);
 
-  // 选择一个 campaign（也可用 env 指定）
-  const campaignName = process.env.CAMPAIGN || 'CHRISTMAS_SALE';
-  const c = CAMPAIGNS.find((x) => x.name === campaignName);
-  if (!c) {
-    test.skip(true, 'campaign not configured');
+  test.skip(!campaign, "campaign not configured");
+  if (!campaign) {
     return;
   }
 
-  // ✅ 过期后自动 skip（不报警）
-  if (isExpired(c.expiresAt)) {
-    test.skip(true, `campaign expired: ${c.name}`);
-    return;
-  }
+  test.skip(isExpired(campaign.expiresAt), `campaign expired: ${campaign.name}`);
 
-  // 设置随机语言
-  await page.setExtraHTTPHeaders({ 'Accept-Language': pick(LOCALES) });
-  await page.waitForTimeout(jitterMs());
+  await installWebVitalsCollector(page);
+  await applyDeterministicJourneyHeaders(page);
 
-  // 收集网络请求
-  const getNet = attachNetworkCollectors(page);
-  const consoleErrors: string[] = [];
-  page.on('console', (msg) => {
-    if (msg.type() === 'error') {
-      consoleErrors.push(msg.text());
-    }
-  });
+  try {
+    await openStableStorefrontPage(
+      page,
+      buildStorefrontUrl(target.url, campaign.path),
+      [
+        page.locator("h1").first(),
+        page.getByRole("link", { name: /Shop Now/i }).first(),
+        page.locator("main a[href*='/products/']").first(),
+      ],
+      {
+        attempts: 3,
+        readyMessage: `${campaign.name} 活动页核心内容未出现`,
+        readyTimeout: 10000,
+      },
+    );
 
-  await page.goto(base + c.path, { waitUntil: 'domcontentloaded' });
-  await closeMarketingPopups(page);
+    await test.step("活动页最低成功断言", async () => {
+      await expect(
+        page.locator("h1").or(page.getByText(/Sale|Christmas|Off/i)),
+      ).toBeVisible({ timeout: 20000 });
+      await captureJourneyVitalsCheckpoint(page, diagnostics, "campaign-landing");
+    });
 
-  // ✅ 最低断言：页面标题/商品列表/Shop Now 按钮出现即可
-  await expect(
-    page.locator('h1').or(page.getByText(/Sale|Christmas|Off/i))
-  ).toBeVisible({ timeout: 20000 });
-
-  // ✅ 加一个"活动页常见问题"断言：主按钮可点击
-  const shopNow = page.getByRole('link', { name: /Shop Now/i }).first();
-  if (await shopNow.isVisible().catch(() => false)) {
-    await shopNow.click();
-  }
-
-  // 收集网络摘要
-  const net = getNet();
-  testInfo.attach('network-summary', {
-    body: JSON.stringify(net, null, 2),
-    contentType: 'application/json',
-  });
-
-  // 收集 Console Errors
-  if (consoleErrors.length) {
-    testInfo.attach('console-errors', {
-      body: consoleErrors.join('\n\n'),
-      contentType: 'text/plain',
+    await test.step("主 CTA 可交互", async () => {
+      const shopNow = page.getByRole("link", { name: /Shop Now/i }).first();
+      if (await shopNow.isVisible().catch(() => false)) {
+        await shopNow.click();
+      }
+    });
+  } finally {
+    await test.step("收集关键证据", async () => {
+      await attachJourneyEvidence(page, testInfo, diagnostics);
     });
   }
 });

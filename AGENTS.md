@@ -27,7 +27,7 @@
 - 当前 CI 行为：
   - `fullyParallel: true`
   - `retries = 2`（仅 `CI`）
-  - `workers = 1`（仅 `CI`）
+  - `workers` 默认取 `2`（仅 `CI`），可由 `PLAYWRIGHT_WORKERS` 覆盖
 
 ## 目录职责
 
@@ -272,17 +272,17 @@ npx tsc --noEmit
 
 不要默认这个仓库当前是“全绿无警报”的完美状态。
 
-在生成本文件时，已确认：
+当前仓库里有多份 `.temp` 模板 / 草稿文件，不是正式活跃测试。
 
-- `npx tsc --noEmit` 会失败
-- 失败位置在 `src/utils/vitals.ts`
-- 失败原因主要是 `window.__vitals` 的类型声明缺失，以及 `PerformanceObserverInit.durationThreshold` 类型不兼容
-- 当前仓库里有多份 `.temp` 模板 / 草稿文件，不是正式活跃测试
+截至当前基线：
+
+- `npx tsc --noEmit` 应该通过
+- `src/utils/vitals.ts` 里的类型声明与 `durationThreshold` 兼容问题已经收敛
 
 这意味着：
 
-- 你做完改动后跑全量 `tsc`，如果只报上面这些已知错误，不要第一时间怀疑是自己把锅炖糊了
-- 但如果你正好修改了 `src/utils/vitals.ts`，最好顺手把那块基线问题一起收拾掉
+- 如果你做完改动后跑全量 `tsc` 反而挂了，先优先怀疑本次修改，不要拿旧文档当挡箭牌
+- 如果你继续修改 `src/utils/vitals.ts`，优先保持现有的浏览器端类型声明和 `web-vitals` 注入兼容性
 
 ## 编码与文件卫生
 

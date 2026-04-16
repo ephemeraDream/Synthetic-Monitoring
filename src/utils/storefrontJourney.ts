@@ -1,7 +1,11 @@
 import { expect, type Locator, type Page, type TestInfo } from "@playwright/test";
 import { VITALS_THRESHOLDS } from "../config/vitals_thresholds";
-import { attachHAR } from "./har";
-import { attachNetworkCollectors } from "./network";
+import { attachHAR, buildHAR } from "./har";
+import {
+  startNetworkCapture,
+  type NetworkCaptureEntry,
+  type NetworkSummary,
+} from "./network";
 import { waitAndClosePopup } from "./popup";
 import { waitAndCloseJumpPopup } from "./jumpPopup";
 import {
@@ -14,11 +18,19 @@ import {
 export const ATHENA_PRO_TITLE = "Athena Pro Gaming Chair";
 export const ATHENA_PRO_SLUG = "blacklyte-athena-pro-gaming-chair";
 export const DETERMINISTIC_ACCEPT_LANGUAGE = "en-US,en;q=0.9";
+const TEMPORARY_ERROR_PAGE_PATTERNS = [
+  /something went wrong/i,
+  /there was a problem loading this website/i,
+  /try refreshing the page/i,
+  /if the site still doesn't load, please try again in a few minutes/i,
+];
 
 export type JourneyPriority = keyof typeof VITALS_THRESHOLDS;
 
 export type JourneyDiagnostics = {
-  getNetworkSummary: ReturnType<typeof attachNetworkCollectors>;
+  disposeNetworkCapture: () => void;
+  getNetworkEntries: () => NetworkCaptureEntry[];
+  getNetworkSummary: () => NetworkSummary;
   consoleLogs: Array<{ type: string; text: string }>;
   consoleErrors: string[];
   failedRequests: Array<{ url: string; failure: string }>;
@@ -32,7 +44,7 @@ export function setupJourneyDiagnostics(page: Page): JourneyDiagnostics {
   const consoleLogs: Array<{ type: string; text: string }> = [];
   const consoleErrors: string[] = [];
   const failedRequests: Array<{ url: string; failure: string }> = [];
-  const getNetworkSummary = attachNetworkCollectors(page);
+  const networkCapture = startNetworkCapture(page);
   let pageCrashed = false;
 
   page.on("console", (msg) => {
@@ -61,7 +73,9 @@ export function setupJourneyDiagnostics(page: Page): JourneyDiagnostics {
   });
 
   return {
-    getNetworkSummary,
+    disposeNetworkCapture: networkCapture.dispose,
+    getNetworkEntries: networkCapture.getEntries,
+    getNetworkSummary: networkCapture.getSummary,
     consoleLogs,
     consoleErrors,
     failedRequests,
@@ -186,7 +200,7 @@ export function buildStorefrontUrl(baseUrl: string, pathname: string): string {
   return new URL(pathname, baseUrl).toString();
 }
 
-export async function openStorefrontPage(
+async function gotoStorefrontPageOnce(
   page: Page,
   url: string,
   timeout = 45000,
@@ -195,11 +209,76 @@ export async function openStorefrontPage(
   await closeSitePopups(page);
 }
 
+export async function openStorefrontPage(
+  page: Page,
+  url: string,
+  timeout = 45000,
+): Promise<void> {
+  await openStableStorefrontPage(page, url, undefined, {
+    navigationTimeout: timeout,
+  });
+}
+
 export async function isTemporaryErrorPage(page: Page): Promise<boolean> {
   const title = await page.title().catch(() => "");
   const bodyText = (await page.locator("body").textContent().catch(() => "")) ?? "";
+  const pageText = `${title}\n${bodyText}`;
 
-  return /something went wrong/i.test(title) || /something went wrong/i.test(bodyText);
+  return TEMPORARY_ERROR_PAGE_PATTERNS.some((pattern) => pattern.test(pageText));
+}
+
+async function recoverTemporaryErrorPage(
+  page: Page,
+  fallbackUrl?: string,
+  timeout = 15000,
+): Promise<boolean> {
+  if (!(await isTemporaryErrorPage(page))) {
+    return true;
+  }
+
+  const refreshButton = await firstVisible(
+    [
+      page.getByRole("button", { name: /refresh page/i }).first(),
+      page.locator("button").filter({ hasText: /refresh page/i }).first(),
+      page.locator("button, a").filter({ hasText: /^refresh$/i }).first(),
+    ],
+    1500,
+  );
+
+  const settleAfterRecoveryAction = async (): Promise<boolean> => {
+    await page.waitForTimeout(500);
+    await page.waitForLoadState("domcontentloaded", { timeout }).catch(() => {});
+    await closeSitePopups(page, 800).catch(() => {});
+    return !(await isTemporaryErrorPage(page));
+  };
+
+  if (refreshButton) {
+    await refreshButton.click({ force: true }).catch(() => {});
+    if (await settleAfterRecoveryAction()) {
+      return true;
+    }
+  }
+
+  const reloaded = await page.reload({ waitUntil: "domcontentloaded", timeout })
+    .then(() => true)
+    .catch(() => false);
+  if (reloaded) {
+    await closeSitePopups(page, 800).catch(() => {});
+    if (!(await isTemporaryErrorPage(page))) {
+      return true;
+    }
+  }
+
+  if (fallbackUrl) {
+    const reopened = await gotoStorefrontPageOnce(page, fallbackUrl, timeout)
+      .then(() => true)
+      .catch(() => false);
+    if (reopened && !(await isTemporaryErrorPage(page))) {
+      return true;
+    }
+  }
+
+  return !(await isTemporaryErrorPage(page));
 }
 
 export async function openStableStorefrontPage(
@@ -208,16 +287,18 @@ export async function openStableStorefrontPage(
   readyLocators?: Locator[],
   options?: {
     attempts?: number;
+    navigationTimeout?: number;
     readyMessage?: string;
     readyTimeout?: number;
   },
 ): Promise<void> {
   const attempts = options?.attempts ?? 2;
+  const navigationTimeout = options?.navigationTimeout ?? 45000;
   const readyTimeout = options?.readyTimeout ?? 5000;
   const readyMessage = options?.readyMessage ?? "页面核心结构未出现";
 
   for (let attempt = 0; attempt < attempts; attempt++) {
-    const opened = await openStorefrontPage(page, url)
+    const opened = await gotoStorefrontPageOnce(page, url, navigationTimeout)
       .then(() => true)
       .catch(() => false);
 
@@ -227,8 +308,11 @@ export async function openStableStorefrontPage(
     }
 
     if (await isTemporaryErrorPage(page)) {
-      await page.waitForTimeout(1000);
-      continue;
+      const recovered = await recoverTemporaryErrorPage(page, url, navigationTimeout);
+      if (!recovered) {
+        await page.waitForTimeout(1000);
+        continue;
+      }
     }
 
     if (!readyLocators?.length) {
@@ -260,6 +344,7 @@ export async function navigateByLocatorHref(
 ): Promise<void> {
   const href = await link.getAttribute("href");
   expect(href, "链接缺少 href").toBeTruthy();
+  const resolvedUrl = new URL(href!, page.url()).toString();
 
   const waitForTarget = () =>
     typeof waitFor === "function"
@@ -272,6 +357,41 @@ export async function navigateByLocatorHref(
           waitUntil: "domcontentloaded",
         });
 
+  const navigateByResolvedUrl = async (): Promise<boolean> => {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const opened = await openStableStorefrontPage(page, resolvedUrl, undefined, {
+        attempts: 3,
+        navigationTimeout: timeout,
+        readyTimeout: 8000,
+      })
+        .then(() => true)
+        .catch(() => false);
+
+      if (!opened) {
+        await page.waitForTimeout(1000);
+        continue;
+      }
+
+      const matched = await waitForTarget()
+        .then(() => true)
+        .catch(() => false);
+
+      if (!matched) {
+        await page.waitForTimeout(1000);
+        continue;
+      }
+
+      if (await isTemporaryErrorPage(page)) {
+        await page.waitForTimeout(1000);
+        continue;
+      }
+
+      return true;
+    }
+
+    return false;
+  };
+
   let navigated = await Promise.all([
     waitForTarget()
       .then(() => true)
@@ -279,12 +399,15 @@ export async function navigateByLocatorHref(
     link.click({ force: true }).catch(() => {}),
   ]).then(([didNavigate]) => didNavigate);
 
+  if (navigated) {
+    await closeSitePopups(page, 800);
+    if (await isTemporaryErrorPage(page)) {
+      navigated = await recoverTemporaryErrorPage(page, resolvedUrl, timeout);
+    }
+  }
+
   if (!navigated) {
-    await page.goto(new URL(href!, page.url()).toString(), {
-      waitUntil: "domcontentloaded",
-    });
-    await waitForTarget();
-    navigated = true;
+    navigated = await navigateByResolvedUrl();
   }
 
   expect(navigated, "未能通过链接完成目标导航").toBeTruthy();
@@ -459,14 +582,48 @@ export async function submitSearch(
       .catch(() => false);
 
     if (!pressed) {
-      await form.evaluate((node) => (node as HTMLFormElement).requestSubmit());
+      await input.evaluate((node) => {
+        const inputElement = node as HTMLInputElement;
+        inputElement.form?.requestSubmit();
+      });
     }
+  };
+
+  const submitViaInputForm = async (): Promise<void> => {
+    const activeInput = await firstVisible(
+      [
+        input,
+        page.locator('input[name="q"][type="search"]'),
+        page.locator('input[type="search"]'),
+      ],
+      3000,
+    );
+
+    if (!activeInput) {
+      await page.keyboard.press("Enter").catch(() => {});
+      return;
+    }
+
+    await activeInput.evaluate((node) => {
+      const inputElement = node as HTMLInputElement;
+      const formElement = inputElement.form;
+
+      if (formElement) {
+        formElement.requestSubmit();
+        return;
+      }
+
+      inputElement.focus();
+      inputElement.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      inputElement.dispatchEvent(new KeyboardEvent("keypress", { key: "Enter", bubbles: true }));
+      inputElement.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true }));
+    });
   };
 
   let navigated = await Promise.all([
     page
       .waitForURL(/\/search\?/i, {
-        timeout: 15000,
+          timeout: 15000,
         waitUntil: "domcontentloaded",
       })
       .then(() => true)
@@ -483,8 +640,25 @@ export async function submitSearch(
         })
         .then(() => true)
         .catch(() => false),
-      form.evaluate((node) => (node as HTMLFormElement).requestSubmit()),
+      submitViaInputForm(),
     ]).then(([didNavigate]) => didNavigate);
+  }
+
+  if (!navigated) {
+    const searchUrl = new URL(`/search?q=${encodeURIComponent(keyword)}`, page.url()).toString();
+
+    const opened = await openStableStorefrontPage(page, searchUrl, undefined, {
+      attempts: 2,
+      navigationTimeout: 15000,
+      readyMessage: "搜索结果页未稳定打开",
+      readyTimeout: 8000,
+    })
+      .then(() => true)
+      .catch(() => false);
+
+    if (opened) {
+      navigated = /\/search(?:\?|$)/i.test(page.url());
+    }
   }
 
   expect(navigated, "搜索表单未跳转到结果页").toBeTruthy();
@@ -548,8 +722,28 @@ export async function openProductPdp(
   slug: string,
   title: string,
 ): Promise<void> {
-  await page.goto(buildStorefrontUrl(baseUrl, `/products/${slug}`), {
-    waitUntil: "domcontentloaded",
+  const productUrl = buildStorefrontUrl(baseUrl, `/products/${slug}`);
+  const pdpReadyLocators = [
+    page.locator("main").getByText(title, { exact: true }).first(),
+    page
+      .locator(".product_info_new_product_title, .product_info_new_right_title, h1")
+      .filter({ hasText: title })
+      .first(),
+    page
+      .locator(".product_info_new_right_buybox_btns_btn")
+      .filter({ hasText: /^add to cart$/i })
+      .first(),
+    page
+      .locator(".product_infor_simplicity_right_buybox_btns_btn")
+      .filter({ hasText: /^add to cart$/i })
+      .first(),
+    page.getByRole("button", { name: /add to cart/i }).first(),
+  ];
+
+  await openStableStorefrontPage(page, productUrl, pdpReadyLocators, {
+    attempts: 3,
+    readyMessage: `PDP 一直没有出现 ${title} 标题或加购入口`,
+    readyTimeout: 8000,
   });
   await dismissOverlays(page);
 
@@ -789,107 +983,121 @@ export async function attachJourneyEvidence(
   const shouldAttachConsoleLogs =
     shouldAttachExtendedEvidence || diagnostics.consoleErrors.length > 0;
 
-  testInfo.attach("network-summary", {
-    body: JSON.stringify(diagnostics.getNetworkSummary(), null, 2),
-    contentType: "application/json",
-  });
-
-  if (shouldAttachExtendedEvidence) {
-    await attachHAR(page, testInfo);
-  }
-
-  if (shouldAttachConsoleLogs && diagnostics.consoleLogs.length > 0) {
-    testInfo.attach("console-logs", {
-      body: JSON.stringify(diagnostics.consoleLogs, null, 2),
+  try {
+    await testInfo.attach("network-summary", {
+      body: JSON.stringify(diagnostics.getNetworkSummary(), null, 2),
       contentType: "application/json",
     });
-  }
 
-  if (diagnostics.consoleErrors.length > 0) {
-    testInfo.attach("console-errors", {
-      body: diagnostics.consoleErrors.join("\n\n"),
-      contentType: "text/plain",
-    });
-  }
+    if (shouldAttachExtendedEvidence) {
+      const url = page.isClosed() ? "" : page.url();
+      const title =
+        page.isClosed()
+          ? ""
+          : await page.title().catch(() => url);
+      const har = buildHAR(diagnostics.getNetworkEntries(), {
+        startedDateTime: new Date().toISOString(),
+        title,
+        url,
+      });
+      await attachHAR(har, testInfo);
+    }
 
-  if (diagnostics.failedRequests.length > 0) {
-    testInfo.attach("failed-requests", {
-      body: JSON.stringify(diagnostics.failedRequests, null, 2),
-      contentType: "application/json",
-    });
-  }
+    if (shouldAttachConsoleLogs && diagnostics.consoleLogs.length > 0) {
+      await testInfo.attach("console-logs", {
+        body: JSON.stringify(diagnostics.consoleLogs, null, 2),
+        contentType: "application/json",
+      });
+    }
 
-  if (!page.isClosed()) {
-    try {
-      if (diagnostics.vitalsSnapshots.length > 0) {
-        for (const snapshot of diagnostics.vitalsSnapshots) {
-          testInfo.attach(`web-vitals-${toAttachmentSlug(snapshot.label)}`, {
-            body: JSON.stringify(snapshot, null, 2),
+    if (diagnostics.consoleErrors.length > 0) {
+      await testInfo.attach("console-errors", {
+        body: diagnostics.consoleErrors.join("\n\n"),
+        contentType: "text/plain",
+      });
+    }
+
+    if (diagnostics.failedRequests.length > 0) {
+      await testInfo.attach("failed-requests", {
+        body: JSON.stringify(diagnostics.failedRequests, null, 2),
+        contentType: "application/json",
+      });
+    }
+
+    if (!page.isClosed()) {
+      try {
+        if (diagnostics.vitalsSnapshots.length > 0) {
+          for (const snapshot of diagnostics.vitalsSnapshots) {
+            await testInfo.attach(`web-vitals-${toAttachmentSlug(snapshot.label)}`, {
+              body: JSON.stringify(snapshot, null, 2),
+              contentType: "application/json",
+            });
+          }
+
+          await testInfo.attach("web-vitals-checkpoints", {
+            body: JSON.stringify(diagnostics.vitalsSnapshots, null, 2),
             contentType: "application/json",
           });
         }
 
-        testInfo.attach("web-vitals-checkpoints", {
-          body: JSON.stringify(diagnostics.vitalsSnapshots, null, 2),
-          contentType: "application/json",
-        });
-      }
-
-      if (!diagnostics.pageCrashed) {
-        const vitals = await finalizeWebVitals(page, "final-current-page");
-        testInfo.attach("web-vitals", {
-          body: JSON.stringify(vitals, null, 2),
-          contentType: "application/json",
-        });
-        warnVitalsThresholds("final-current-page", vitals, priority);
-      } else {
-        console.warn("页面已 crash，跳过最终 Web Vitals 采集");
-      }
-    } catch (error) {
-      console.warn("无法读取 Web Vitals:", error);
-    }
-
-    if (shouldAttachExtendedEvidence && !diagnostics.pageCrashed) {
-      try {
-        const takeScreenshot = (fullPage: boolean, timeout: number) =>
-          page.screenshot({
-            fullPage,
-            timeout,
-            animations: "disabled",
-            caret: "hide",
+        if (!diagnostics.pageCrashed) {
+          const vitals = await finalizeWebVitals(page, "final-current-page");
+          await testInfo.attach("web-vitals", {
+            body: JSON.stringify(vitals, null, 2),
+            contentType: "application/json",
           });
-
-        const screenshot = await takeScreenshot(true, 15000).catch(async (error) => {
-          const message = error instanceof Error ? error.message : String(error);
-          if (message.includes("32767 pixels")) {
-            console.warn("全页截图过长，回退为视口截图");
-            return takeScreenshot(false, 15000);
-          }
-
-          if (message.includes("Timeout")) {
-            console.warn("全页截图超时，回退为视口截图");
-            return takeScreenshot(false, 20000);
-          }
-
-          throw error;
-        });
-        testInfo.attach("final-screenshot", {
-          body: screenshot,
-          contentType: "image/png",
-        });
+          warnVitalsThresholds("final-current-page", vitals, priority);
+        } else {
+          console.warn("页面已 crash，跳过最终 Web Vitals 采集");
+        }
       } catch (error) {
-        console.warn("无法截取页面截图:", error);
+        console.warn("无法读取 Web Vitals:", error);
       }
 
-      try {
-        const html = await page.content();
-        testInfo.attach("page-html", {
-          body: html,
-          contentType: "text/html",
-        });
-      } catch (error) {
-        console.warn("无法获取页面 HTML:", error);
+      if (shouldAttachExtendedEvidence && !diagnostics.pageCrashed) {
+        try {
+          const takeScreenshot = (fullPage: boolean, timeout: number) =>
+            page.screenshot({
+              fullPage,
+              timeout,
+              animations: "disabled",
+              caret: "hide",
+            });
+
+          const screenshot = await takeScreenshot(true, 15000).catch(async (error) => {
+            const message = error instanceof Error ? error.message : String(error);
+            if (message.includes("32767 pixels")) {
+              console.warn("全页截图过长，回退为视口截图");
+              return takeScreenshot(false, 15000);
+            }
+
+            if (message.includes("Timeout")) {
+              console.warn("全页截图超时，回退为视口截图");
+              return takeScreenshot(false, 20000);
+            }
+
+            throw error;
+          });
+          await testInfo.attach("final-screenshot", {
+            body: screenshot,
+            contentType: "image/png",
+          });
+        } catch (error) {
+          console.warn("无法截取页面截图:", error);
+        }
+
+        try {
+          const html = await page.content();
+          await testInfo.attach("page-html", {
+            body: html,
+            contentType: "text/html",
+          });
+        } catch (error) {
+          console.warn("无法获取页面 HTML:", error);
+        }
       }
     }
+  } finally {
+    diagnostics.disposeNetworkCapture();
   }
 }

@@ -200,57 +200,56 @@ async function assertRegionLanding(
 
 test.describe("P1_REGION_SWITCH - 区域切换", () => {
   const currentTarget = getCurrentTarget();
-  const switchTarget = getAllTargets().find((target) => target.region !== currentTarget.region);
+  const switchTargets = getAllTargets().filter((target) => target.region !== currentTarget.region);
 
-  test(`切换到 ${switchTarget?.region ?? "目标区域"} 站点`, async ({ page, isMobile }, testInfo) => {
-    test.skip(!switchTarget, "当前没有可切换的其他区域");
-    if (!switchTarget) {
-      return;
-    }
+  test.skip(switchTargets.length === 0, "当前没有可切换的其他区域");
 
-    const diagnostics = setupJourneyDiagnostics(page);
-    let targetOption: Locator | null = null;
+  for (const switchTarget of switchTargets) {
+    test(`切换到 ${switchTarget.region} 站点`, async ({ page, isMobile }, testInfo) => {
+      const diagnostics = setupJourneyDiagnostics(page);
+      let targetOption: Locator | null = null;
 
-    await installWebVitalsCollector(page);
-    await applyDeterministicJourneyHeaders(page);
+      await installWebVitalsCollector(page);
+      await applyDeterministicJourneyHeaders(page);
 
-    try {
-      await test.step("打开当前区域首页", async () => {
-        await openStableStorefrontPage(page, currentTarget.url, undefined, {
-          attempts: 2,
+      try {
+        await test.step("打开当前区域首页", async () => {
+          await openStableStorefrontPage(page, currentTarget.url, undefined, {
+            attempts: 2,
+          });
+          await captureJourneyVitalsCheckpoint(
+            page,
+            diagnostics,
+            `home-${currentTarget.region.toLowerCase()}`,
+            "P1",
+          );
         });
-        await captureJourneyVitalsCheckpoint(
-          page,
-          diagnostics,
-          `home-${currentTarget.region.toLowerCase()}`,
-          "P1",
-        );
-      });
 
-      await test.step("找到真实区域切换入口", async () => {
-        targetOption = isMobile
-          ? await findMobileRegionOption(page, switchTarget)
-          : await findDesktopRegionOption(page, switchTarget);
-      });
+        await test.step("找到真实区域切换入口", async () => {
+          targetOption = isMobile
+            ? await findMobileRegionOption(page, switchTarget)
+            : await findDesktopRegionOption(page, switchTarget);
+        });
 
-      await test.step(`切换到 ${switchTarget.region} 站点`, async () => {
-        expect(targetOption, `${switchTarget.region} 区域选项未准备好`).not.toBeNull();
-        await switchByRegionOption(page, targetOption!, switchTarget);
-      });
+        await test.step(`切换到 ${switchTarget.region} 站点`, async () => {
+          expect(targetOption, `${switchTarget.region} 区域选项未准备好`).not.toBeNull();
+          await switchByRegionOption(page, targetOption!, switchTarget);
+        });
 
-      await test.step("目标区域站点正常加载", async () => {
-        await assertRegionLanding(page, switchTarget, isMobile);
-        await captureJourneyVitalsCheckpoint(
-          page,
-          diagnostics,
-          `home-${switchTarget.region.toLowerCase()}`,
-          "P1",
-        );
-      });
-    } finally {
-      await test.step("收集关键证据", async () => {
-        await attachJourneyEvidence(page, testInfo, diagnostics, "P1");
-      });
-    }
-  });
+        await test.step("目标区域站点正常加载", async () => {
+          await assertRegionLanding(page, switchTarget, isMobile);
+          await captureJourneyVitalsCheckpoint(
+            page,
+            diagnostics,
+            `home-${switchTarget.region.toLowerCase()}`,
+            "P1",
+          );
+        });
+      } finally {
+        await test.step("收集关键证据", async () => {
+          await attachJourneyEvidence(page, testInfo, diagnostics, "P1");
+        });
+      }
+    });
+  }
 });
