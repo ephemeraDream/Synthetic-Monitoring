@@ -40,6 +40,39 @@ export type JourneyDiagnostics = {
 
 export type UrlWaitMatcher = RegExp | ((url: URL) => boolean);
 
+function matchesUrlWaitMatcher(
+  currentUrl: string,
+  waitFor: UrlWaitMatcher,
+): boolean {
+  try {
+    if (typeof waitFor === "function") {
+      return waitFor(new URL(currentUrl));
+    }
+
+    return waitFor.test(currentUrl);
+  } catch {
+    return false;
+  }
+}
+
+async function waitForMatchedCurrentUrl(
+  page: Page,
+  waitFor: UrlWaitMatcher,
+  timeout: number,
+): Promise<boolean> {
+  const deadline = Date.now() + timeout;
+
+  while (Date.now() < deadline) {
+    if (matchesUrlWaitMatcher(page.url(), waitFor)) {
+      return true;
+    }
+
+    await page.waitForTimeout(250);
+  }
+
+  return matchesUrlWaitMatcher(page.url(), waitFor);
+}
+
 export function setupJourneyDiagnostics(page: Page): JourneyDiagnostics {
   const consoleLogs: Array<{ type: string; text: string }> = [];
   const consoleErrors: string[] = [];
@@ -372,9 +405,17 @@ export async function navigateByLocatorHref(
         continue;
       }
 
-      const matched = await waitForTarget()
+      if (matchesUrlWaitMatcher(page.url(), waitFor)) {
+        return true;
+      }
+
+      let matched = await waitForTarget()
         .then(() => true)
         .catch(() => false);
+
+      if (!matched) {
+        matched = await waitForMatchedCurrentUrl(page, waitFor, Math.min(timeout, 10000));
+      }
 
       if (!matched) {
         await page.waitForTimeout(1000);
@@ -398,6 +439,14 @@ export async function navigateByLocatorHref(
       .catch(() => false),
     link.click({ force: true }).catch(() => {}),
   ]).then(([didNavigate]) => didNavigate);
+
+  if (!navigated && matchesUrlWaitMatcher(page.url(), waitFor)) {
+    navigated = true;
+  }
+
+  if (!navigated) {
+    navigated = await waitForMatchedCurrentUrl(page, waitFor, Math.min(timeout, 10000));
+  }
 
   if (navigated) {
     await closeSitePopups(page, 800);

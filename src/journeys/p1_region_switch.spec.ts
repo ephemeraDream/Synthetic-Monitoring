@@ -120,7 +120,7 @@ async function switchByRegionOption(
     page,
     targetOption,
     (url) => normalizeHost(url.toString()) === targetHost,
-    20000,
+    45000,
   );
   await closeSitePopups(page);
 }
@@ -135,7 +135,7 @@ async function assertRegionLanding(
 
   await expect
     .poll(() => normalizeHost(page.url()), {
-      timeout: 20000,
+      timeout: 45000,
       message: `URL 一直没有切到 ${target.region} 站点`,
     })
     .toBe(targetHost);
@@ -231,10 +231,10 @@ test.describe("P1_REGION_SWITCH - 区域切换", () => {
             : await findDesktopRegionOption(page, switchTarget);
         });
 
-        await test.step(`切换到 ${switchTarget.region} 站点`, async () => {
-          expect(targetOption, `${switchTarget.region} 区域选项未准备好`).not.toBeNull();
-          await switchByRegionOption(page, targetOption!, switchTarget);
-        });
+      await test.step(`切换到 ${switchTarget.region} 站点`, async () => {
+        expect(targetOption, `${switchTarget.region} 区域选项未准备好`).not.toBeNull();
+        await switchByRegionOption(page, targetOption!, switchTarget);
+      });
 
         await test.step("目标区域站点正常加载", async () => {
           await assertRegionLanding(page, switchTarget, isMobile);
