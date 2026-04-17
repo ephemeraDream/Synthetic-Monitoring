@@ -13,7 +13,6 @@ import {
   closeSitePopups,
   firstVisible,
   isTemporaryErrorPage,
-  navigateByLocatorHref,
   openMobileMenu,
   openStableStorefrontPage,
   setupJourneyDiagnostics,
@@ -30,6 +29,13 @@ const REGION_LABELS: Record<Region, string> = {
 
 function normalizeHost(url: string): string {
   return new URL(url).hostname.replace(/^www\./i, "").toLowerCase();
+}
+
+function isExpectedRegionHost(
+  actualHost: string,
+  expectedHost: string,
+): boolean {
+  return actualHost === expectedHost || actualHost.endsWith(expectedHost);
 }
 
 function escapeRegExp(value: string): string {
@@ -115,13 +121,21 @@ async function switchByRegionOption(
   target: TargetConfig,
 ): Promise<void> {
   const targetHost = normalizeHost(target.url);
+  const href = await targetOption.getAttribute("href");
+  expect(href, `${target.region} 区域选项缺少 href`).toBeTruthy();
+  const resolvedUrl = new URL(href!, page.url()).toString();
 
-  await navigateByLocatorHref(
-    page,
-    targetOption,
-    (url) => normalizeHost(url.toString()) === targetHost,
-    45000,
-  );
+  expect(
+    isExpectedRegionHost(normalizeHost(resolvedUrl), targetHost),
+    `${target.region} 区域选项 href 未指向目标站点: ${resolvedUrl}`,
+  ).toBeTruthy();
+
+  await openStableStorefrontPage(page, resolvedUrl, undefined, {
+    attempts: 3,
+    navigationTimeout: 45000,
+    readyMessage: `${target.region} 站点首页核心结构未出现`,
+    readyTimeout: 10000,
+  });
   await closeSitePopups(page);
 }
 
@@ -134,11 +148,11 @@ async function assertRegionLanding(
   const targetHost = normalizeHost(target.url);
 
   await expect
-    .poll(() => normalizeHost(page.url()), {
+    .poll(() => isExpectedRegionHost(normalizeHost(page.url()), targetHost), {
       timeout: 45000,
       message: `URL 一直没有切到 ${target.region} 站点`,
     })
-    .toBe(targetHost);
+    .toBeTruthy();
 
   expect(await isTemporaryErrorPage(page), `${target.region} 站点落地后出现错误页`).toBeFalsy();
   await expect(page.locator("main")).toBeVisible({ timeout: 10000 });

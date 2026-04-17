@@ -29,7 +29,7 @@ export const TARGETS: Record<TargetKey, TargetConfig> = {
   },
   UK: {
     region: 'UK',
-    url: 'https://goblacklyte.uk/',
+    url: 'https://blacklyte.uk/',
     checklyLocation: 'eu-west-2',
   },
   AU: {
@@ -58,4 +58,3 @@ export function getCurrentTarget(): TargetConfig {
 export function getAllTargets(): TargetConfig[] {
   return Object.values(TARGETS);
 }
-
