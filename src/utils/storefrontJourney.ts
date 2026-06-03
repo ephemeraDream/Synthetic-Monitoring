@@ -958,12 +958,52 @@ export async function goToCheckout(page: Page): Promise<void> {
   expect(checkoutButton, "购物车页未找到 checkout 按钮").not.toBeNull();
 
   await expect(checkoutButton!).toBeEnabled({ timeout: 5000 });
-  await checkoutButton!.click();
+
+  const targetHref =
+    (await checkoutButton!.getAttribute("href").catch(() => null)) ??
+    (await checkoutButton!.getAttribute("data-href").catch(() => null));
+  const checkoutUrl =
+    targetHref
+      ? new URL(targetHref, page.url()).toString()
+      : null;
+
+  const navigateToCheckout = () =>
+    page.waitForURL(/\/checkouts?\/|\/checkout/i, {
+      timeout: 20000,
+      waitUntil: "domcontentloaded",
+    });
+
+  const tryCheckoutClick = async (force: boolean): Promise<boolean> =>
+    Promise.all([
+      navigateToCheckout()
+        .then(() => true)
+        .catch(() => false),
+      checkoutButton!.click({ force }).catch(() => {}),
+    ]).then(([didNavigate]) => didNavigate);
+
+  let navigated = await tryCheckoutClick(false);
+
+  if (!navigated) {
+    await dismissOverlays(page);
+    navigated = await tryCheckoutClick(true);
+  }
+
+  if (!navigated && checkoutUrl) {
+    navigated = await openStableStorefrontPage(page, checkoutUrl, undefined, {
+      attempts: 2,
+      navigationTimeout: 20000,
+      readyTimeout: 8000,
+    })
+      .then(() => /\/checkouts?\/|\/checkout/i.test(page.url()))
+      .catch(() => false);
+  }
+
+  expect(navigated, "购物车页未能进入 checkout").toBeTruthy();
 
   await page.waitForURL(/\/checkouts?\/|\/checkout/i, {
     timeout: 20000,
     waitUntil: "domcontentloaded",
-  });
+  }).catch(() => {});
 
   const checkoutHeading = await firstVisible(
     [

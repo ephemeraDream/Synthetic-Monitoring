@@ -54,7 +54,8 @@ async function openProductsLanding(
     page.getByRole("button", { name: /menu/i }),
     page.locator('button[aria-label*="menu" i]'),
     page.locator(".mobileMenu-toggle"),
-    page.locator('a[href="/"]'),
+    page.locator(".header-mobile__item--menu button"),
+    page.locator(".header-mobile__item--menu"),
   ];
   const desktopReadyLocators = [
     page.locator("header nav").first(),
