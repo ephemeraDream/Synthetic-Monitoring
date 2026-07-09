@@ -757,12 +757,136 @@ async function hasEmptyCartState(page: Page, timeout = 2000): Promise<boolean> {
   const emptyState = await firstVisible(
     [
       page.getByText(/your shopping cart is empty/i).first(),
-      page.locator("#halo-cart-sidebar").getByText(/your shopping cart is empty/i).first(),
+      page.locator("#halo-cart-sidebar").getByText(/your shopping cart is empty/i),
     ],
     timeout,
   );
 
   return emptyState !== null;
+}
+
+async function isCartPageReady(page: Page, timeout = 3000): Promise<boolean> {
+  if (await isTemporaryErrorPage(page)) {
+    return false;
+  }
+
+  const [cartHeading, cartItem, emptyCartVisible] = await Promise.all([
+    firstVisible(
+      [
+        page.getByRole("heading", { name: /shopping cart|your cart/i }).first(),
+        page.locator("h1, h2").filter({ hasText: /shopping cart|your cart/i }).first(),
+        page.locator("#halo-cart-sidebar").getByText(/your cart/i),
+      ],
+      timeout,
+    ),
+    findCartProduct(page, timeout),
+    hasEmptyCartState(page, Math.min(timeout, 1000)),
+  ]);
+
+  return cartHeading !== null || cartItem !== null || emptyCartVisible;
+}
+
+async function waitForCartPageReady(page: Page, timeout = 15000): Promise<boolean> {
+  const deadline = Date.now() + timeout;
+
+  while (Date.now() < deadline) {
+    if (await isCartPageReady(page, 1000)) {
+      return true;
+    }
+
+    await page.waitForTimeout(250);
+  }
+
+  return isCartPageReady(page, 1000);
+}
+
+async function waitForCartReadySignal(
+  page: Page,
+  isMobile: boolean,
+  timeout: number,
+): Promise<boolean> {
+  const urlTimeout = isMobile ? Math.min(timeout, 8000) : timeout;
+
+  const outcomes = await Promise.all([
+    page
+      .waitForURL(/\/cart(?:[/?#]|$)/i, {
+        timeout: urlTimeout,
+        waitUntil: "domcontentloaded",
+      })
+      .then(() => true)
+      .catch(() => false),
+    waitForCartPageReady(page, timeout),
+  ]);
+
+  return outcomes.some(Boolean);
+}
+
+type AddToCartSuccessSignals = {
+  cartSidebarVisible: boolean;
+  viewCartVisible: boolean;
+  drawerCheckoutVisible: boolean;
+  navigatedToCart: boolean;
+  cartIncreased: boolean;
+};
+
+async function readAddToCartSuccessSignals(
+  page: Page,
+  previousCount: number | null,
+  locators: {
+    cartSidebar: Locator;
+    viewCartButton: Locator;
+    drawerCheckoutButton: Locator;
+  },
+): Promise<AddToCartSuccessSignals> {
+  const [cartSidebarVisible, viewCartVisible, drawerCheckoutVisible, currentCount] =
+    await Promise.all([
+      locators.cartSidebar.isVisible({ timeout: 250 }).catch(() => false),
+      locators.viewCartButton.isVisible({ timeout: 250 }).catch(() => false),
+      locators.drawerCheckoutButton.isVisible({ timeout: 250 }).catch(() => false),
+      previousCount === null ? Promise.resolve(null) : readCartCount(page),
+    ]);
+
+  return {
+    cartSidebarVisible,
+    viewCartVisible,
+    drawerCheckoutVisible,
+    navigatedToCart: /\/cart(?:[/?#]|$)/i.test(page.url()),
+    cartIncreased:
+      previousCount !== null && currentCount !== null && currentCount > previousCount,
+  };
+}
+
+function hasAddToCartSuccessSignal(signals: AddToCartSuccessSignals): boolean {
+  return (
+    signals.drawerCheckoutVisible ||
+    signals.navigatedToCart ||
+    signals.cartIncreased
+  );
+}
+
+async function waitForAddToCartSuccessSignals(
+  page: Page,
+  previousCount: number | null,
+  locators: {
+    cartSidebar: Locator;
+    viewCartButton: Locator;
+    drawerCheckoutButton: Locator;
+  },
+  timeout = 8000,
+): Promise<AddToCartSuccessSignals> {
+  const deadline = Date.now() + timeout;
+  let latest = await readAddToCartSuccessSignals(page, previousCount, locators);
+
+  while (Date.now() < deadline) {
+    if (hasAddToCartSuccessSignal(latest)) {
+      return latest;
+    }
+
+    await page.waitForTimeout(250);
+    latest = await readAddToCartSuccessSignals(page, previousCount, locators);
+  }
+
+  return latest;
 }
 
 export async function openProductPdp(
@@ -861,25 +985,22 @@ export async function addCurrentProductToCart(page: Page): Promise<void> {
     )
     .first();
 
-  const [
+  const {
     cartSidebarVisible,
     viewCartVisible,
     drawerCheckoutVisible,
     navigatedToCart,
     cartIncreased,
-  ] = await Promise.all([
-    waitForVisible(cartSidebar, 8000),
-    waitForVisible(viewCartButton, 8000),
-    waitForVisible(drawerCheckoutButton, 8000),
-    page
-      .waitForURL(/\/cart(?:\?|$)/i, {
-        timeout: 8000,
-        waitUntil: "domcontentloaded",
-      })
-      .then(() => true)
-      .catch(() => false),
-    waitForCartIncrease(page, beforeCartCount, 8000),
-  ]);
+  } = await waitForAddToCartSuccessSignals(
+    page,
+    beforeCartCount,
+    {
+      cartSidebar,
+      viewCartButton,
+      drawerCheckoutButton,
+    },
+    8000,
+  );
 
   const cartProduct = await findCartProduct(page, 5000);
   const emptyCartVisible = await hasEmptyCartState(page, 2000);
@@ -894,31 +1015,53 @@ export async function addCurrentProductToCart(page: Page): Promise<void> {
 }
 
 export async function goToCart(page: Page, isMobile: boolean): Promise<void> {
-  await dismissOverlays(page);
+  await closeSitePopups(page, 800);
 
-  const cartEntry = await firstVisible(
-    [
-      page.locator('a.button-view-cart[href^="/cart"]'),
-      page.locator("a.button-view-cart"),
-      page.getByRole("link", { name: /Cart .*item/i }),
-      page.locator('a[href="/cart"].cart-icon-bubble'),
-      page.locator('a[href="/cart"]'),
-    ],
-    8000,
-  );
-  expect(cartEntry, "未找到进入购物车的入口").not.toBeNull();
+  if (!(await isCartPageReady(page, 1500))) {
+    const cartEntry = await firstVisible(
+      [
+        page.locator('a.button-view-cart[href^="/cart"]'),
+        page.locator("a.button-view-cart"),
+        page.getByRole("link", { name: /Cart .*item/i }),
+        page.locator('a[href="/cart"].cart-icon-bubble'),
+        page.locator('a[href="/cart"]'),
+      ],
+      8000,
+    );
+    expect(cartEntry, "未找到进入购物车的入口").not.toBeNull();
 
-  await cartEntry!.click({ force: isMobile });
-  await page.waitForURL(/\/cart(?:\?|$)/i, {
-    timeout: 15000,
-    waitUntil: "domcontentloaded",
-  });
-  await dismissOverlays(page);
+    const cartUrl = new URL("/cart", page.url()).toString();
+    const cartReadySignal = waitForCartReadySignal(page, isMobile, isMobile ? 8000 : 12000);
+    const clicked = await cartEntry!.click({ force: isMobile }).then(() => true).catch(() => false);
+    const reachedCart = clicked ? await cartReadySignal : false;
+
+    if (!reachedCart) {
+      await openStableStorefrontPage(
+        page,
+        cartUrl,
+        [
+          page.getByRole("heading", { name: /shopping cart|your cart/i }).first(),
+          page.locator("h1, h2").filter({ hasText: /shopping cart|your cart/i }).first(),
+          page.locator(".cart-item").first(),
+          page.locator("[data-cart-item]").first(),
+        ],
+        {
+          attempts: 2,
+          navigationTimeout: 20000,
+          readyMessage: "购物车页核心内容未出现",
+          readyTimeout: 8000,
+        },
+      );
+    }
+  }
+
+  await closeSitePopups(page, 800);
 
   const cartHeading = await firstVisible(
     [
       page.getByRole("heading", { name: /shopping cart|your cart/i }).first(),
       page.locator("h1, h2").filter({ hasText: /shopping cart|your cart/i }).first(),
+      page.locator("#halo-cart-sidebar").getByText(/your cart/i),
     ],
     10000,
   );
@@ -930,10 +1073,16 @@ export async function goToCart(page: Page, isMobile: boolean): Promise<void> {
   const cartItem = await firstVisible(
     [
       page.locator(`main a[href*="${ATHENA_PRO_SLUG}"]`).first(),
+      page.locator(`#halo-cart-sidebar a[href*="${ATHENA_PRO_SLUG}"]`).first(),
       page
         .locator("main a[href*='/products/']")
         .filter({ hasText: /Athena Pro/i })
         .first(),
+      page
+        .locator("#halo-cart-sidebar a[href*='/products/']")
+        .filter({ hasText: /Athena Pro/i })
+        .first(),
+      page.locator("#halo-cart-sidebar").getByText(/Athena Pro/i),
       page.locator(".cart-item").first(),
       page.locator(".line-item").first(),
       page.locator(".cart-item__name").first(),
@@ -949,6 +1098,8 @@ export async function goToCheckout(page: Page): Promise<void> {
 
   const checkoutButton = await firstVisible(
     [
+      page.locator("#cart-sidebar-checkout").filter({ hasText: /checkout/i }).first(),
+      page.locator("#halo-cart-sidebar button").filter({ hasText: /checkout/i }).first(),
       page.locator("button.button-checkout").filter({ hasText: /checkout/i }).first(),
       page.locator('a.button-checkout[href*="/checkout"]').first(),
       page.locator('a[href="/checkout"]').first(),

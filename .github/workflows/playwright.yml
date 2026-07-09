@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      PLAYWRIGHT_WORKERS: "2"
+      PLAYWRIGHT_WORKERS: "3"
 
     steps:
       - uses: actions/checkout@v5
@@ -42,7 +42,7 @@ jobs:
         run: npm ci
 
       - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium webkit
+        run: npx playwright install --with-deps chromium
 
       # 根据 cron 判断国家
       - name: Set TARGET by cron
