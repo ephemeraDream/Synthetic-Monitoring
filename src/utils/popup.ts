@@ -1,6 +1,9 @@
 import { type Locator, type Page } from "@playwright/test";
 
 const CLOSE_ACTION_SELECTORS = [
+  // UpForm feedback flyout.
+  ".upform-container-wrap .uf-close-form-button",
+  ".upform-container-wrap.uf-modal .uf-close-form-button",
   // Omnisend / Soundest subscription flyout.
   '#omnisend-forms-container [id$="-close-action"]',
   '#omnisend-forms-container [id$="-teaser-close-btn"]',
@@ -32,6 +35,9 @@ const CLOSE_TEXT_PATTERNS = [
 ];
 
 const POPUP_VISIBLE_SELECTORS = [
+  ".upform-container-wrap.uf-modal form.uf-form-type-float",
+  ".upform-container-wrap .uf-form-wrap.uf-form-popup",
+  ".upform-container-wrap .uf-close-form-button",
   ".yotpo-smsbump-modal__backdrop[role=\"document\"]",
   "#omnisend-forms-container [id$=\"-close-action\"]",
   "#omnisend-forms-container [id$=\"-teaser-close-btn\"]",
