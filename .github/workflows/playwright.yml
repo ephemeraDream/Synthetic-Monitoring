@@ -42,7 +42,7 @@ jobs:
         run: npm ci
 
       - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --with-deps chromium webkit
 
       # 根据 cron 判断国家
       - name: Set TARGET by cron
