@@ -803,13 +803,24 @@ async function waitForCartPageReady(page: Page, timeout = 15000): Promise<boolea
 async function waitForCartReadySignal(
   page: Page,
   isMobile: boolean,
+  cartUrl: string,
   timeout: number,
 ): Promise<boolean> {
   const deadline = Date.now() + timeout;
 
   while (Date.now() < deadline) {
+    if (await isTemporaryErrorPage(page)) {
+      const recovered = await recoverTemporaryErrorPage(page, cartUrl, 15000);
+      if (!recovered) {
+        return false;
+      }
+
+      await page.waitForTimeout(isMobile ? 200 : 250);
+      continue;
+    }
+
     if (/\/cart(?:[/?#]|$)/i.test(page.url())) {
-      return true;
+      return !(await isTemporaryErrorPage(page));
     }
 
     if (await isCartPageReady(page, 1000)) {
@@ -819,7 +830,13 @@ async function waitForCartReadySignal(
     await page.waitForTimeout(isMobile ? 200 : 250);
   }
 
-  return /\/cart(?:[/?#]|$)/i.test(page.url()) || isCartPageReady(page, 1000);
+  if (await isTemporaryErrorPage(page)) {
+    const recovered = await recoverTemporaryErrorPage(page, cartUrl, 15000);
+    return recovered ? isCartPageReady(page, 2000) : false;
+  }
+
+  return (/\/cart(?:[/?#]|$)/i.test(page.url()) && !(await isTemporaryErrorPage(page))) ||
+    isCartPageReady(page, 1000);
 }
 
 type AddToCartSuccessSignals = {
@@ -918,12 +935,19 @@ async function readCartContentState(
 
 async function waitForCartContentState(
   page: Page,
+  fallbackUrl: string,
   timeout = 12000,
 ): Promise<CartContentState> {
   const deadline = Date.now() + timeout;
   let latest = await readCartContentState(page, 1000);
 
   while (Date.now() < deadline) {
+    if (await isTemporaryErrorPage(page)) {
+      await recoverTemporaryErrorPage(page, fallbackUrl, 15000);
+      latest = await readCartContentState(page, 1000);
+      continue;
+    }
+
     if (latest.cartItem !== null || latest.emptyCartVisible) {
       return latest;
     }
@@ -1062,6 +1086,7 @@ export async function addCurrentProductToCart(page: Page): Promise<void> {
 
 export async function goToCart(page: Page, isMobile: boolean): Promise<void> {
   await closeSitePopups(page, 800);
+  const cartUrl = new URL("/cart", page.url()).toString();
 
   if (!(await isCartPageReady(page, 1500))) {
     const cartEntry = await firstVisible(
@@ -1076,8 +1101,12 @@ export async function goToCart(page: Page, isMobile: boolean): Promise<void> {
     );
     expect(cartEntry, "未找到进入购物车的入口").not.toBeNull();
 
-    const cartUrl = new URL("/cart", page.url()).toString();
-    const cartReadySignal = waitForCartReadySignal(page, isMobile, isMobile ? 8000 : 12000);
+    const cartReadySignal = waitForCartReadySignal(
+      page,
+      isMobile,
+      cartUrl,
+      isMobile ? 10000 : 14000,
+    );
     const clicked = await cartEntry!.click({ force: isMobile }).then(() => true).catch(() => false);
     const reachedCart = clicked ? await cartReadySignal : false;
 
@@ -1102,8 +1131,16 @@ export async function goToCart(page: Page, isMobile: boolean): Promise<void> {
   }
 
   await closeSitePopups(page, 800);
+  if (await isTemporaryErrorPage(page)) {
+    await recoverTemporaryErrorPage(page, cartUrl, 20000);
+  }
 
-  const { cartHeading, cartItem, emptyCartVisible } = await waitForCartContentState(page);
+  expect(await isTemporaryErrorPage(page), "购物车跳转后仍停留在 Shopify 临时错误页").toBeFalsy();
+
+  const { cartHeading, cartItem, emptyCartVisible } = await waitForCartContentState(
+    page,
+    cartUrl,
+  );
 
   expect(emptyCartVisible, "购物车仍然是空的").toBeFalsy();
   expect(
