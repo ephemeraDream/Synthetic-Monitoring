@@ -314,6 +314,40 @@ async function recoverTemporaryErrorPage(
   return !(await isTemporaryErrorPage(page));
 }
 
+export async function recoverIfTemporaryErrorPage(
+  page: Page,
+  fallbackUrl?: string,
+  options?: {
+    timeout?: number;
+    waitFor?: UrlWaitMatcher;
+  },
+): Promise<boolean> {
+  const timeout = options?.timeout ?? 15000;
+
+  if (await isTemporaryErrorPage(page)) {
+    const recovered = await recoverTemporaryErrorPage(page, fallbackUrl, timeout);
+    if (!recovered || (await isTemporaryErrorPage(page))) {
+      return false;
+    }
+  }
+
+  if (!options?.waitFor) {
+    return !(await isTemporaryErrorPage(page));
+  }
+
+  if (matchesUrlWaitMatcher(page.url(), options.waitFor)) {
+    return !(await isTemporaryErrorPage(page));
+  }
+
+  const matched = await waitForMatchedCurrentUrl(
+    page,
+    options.waitFor,
+    Math.min(timeout, 10000),
+  );
+
+  return matched && !(await isTemporaryErrorPage(page));
+}
+
 export async function openStableStorefrontPage(
   page: Page,
   url: string,
@@ -340,12 +374,12 @@ export async function openStableStorefrontPage(
       continue;
     }
 
-    if (await isTemporaryErrorPage(page)) {
-      const recovered = await recoverTemporaryErrorPage(page, url, navigationTimeout);
-      if (!recovered) {
-        await page.waitForTimeout(1000);
-        continue;
-      }
+    const recovered = await recoverIfTemporaryErrorPage(page, url, {
+      timeout: navigationTimeout,
+    });
+    if (!recovered) {
+      await page.waitForTimeout(1000);
+      continue;
     }
 
     if (!readyLocators?.length) {
@@ -390,6 +424,15 @@ export async function navigateByLocatorHref(
           waitUntil: "domcontentloaded",
         });
 
+  const ensureTargetPage = async (): Promise<boolean> => {
+    await closeSitePopups(page, 800).catch(() => {});
+
+    return recoverIfTemporaryErrorPage(page, resolvedUrl, {
+      timeout,
+      waitFor,
+    });
+  };
+
   const navigateByResolvedUrl = async (): Promise<boolean> => {
     for (let attempt = 0; attempt < 2; attempt++) {
       const opened = await openStableStorefrontPage(page, resolvedUrl, undefined, {
@@ -405,7 +448,7 @@ export async function navigateByLocatorHref(
         continue;
       }
 
-      if (matchesUrlWaitMatcher(page.url(), waitFor)) {
+      if (await ensureTargetPage()) {
         return true;
       }
 
@@ -422,7 +465,7 @@ export async function navigateByLocatorHref(
         continue;
       }
 
-      if (await isTemporaryErrorPage(page)) {
+      if (!(await ensureTargetPage())) {
         await page.waitForTimeout(1000);
         continue;
       }
@@ -449,10 +492,7 @@ export async function navigateByLocatorHref(
   }
 
   if (navigated) {
-    await closeSitePopups(page, 800);
-    if (await isTemporaryErrorPage(page)) {
-      navigated = await recoverTemporaryErrorPage(page, resolvedUrl, timeout);
-    }
+    navigated = await ensureTargetPage();
   }
 
   if (!navigated) {
@@ -605,6 +645,9 @@ export async function submitSearch(
   keyword: string,
   isMobile: boolean,
 ): Promise<void> {
+  const searchUrl = new URL(`/search?q=${encodeURIComponent(keyword)}`, page.url()).toString();
+  const searchUrlMatcher = /\/search\?/i;
+
   await input.scrollIntoViewIfNeeded().catch(() => {});
   await input.fill(keyword);
 
@@ -671,8 +714,8 @@ export async function submitSearch(
 
   let navigated = await Promise.all([
     page
-      .waitForURL(/\/search\?/i, {
-          timeout: 15000,
+      .waitForURL(searchUrlMatcher, {
+        timeout: 15000,
         waitUntil: "domcontentloaded",
       })
       .then(() => true)
@@ -683,7 +726,7 @@ export async function submitSearch(
   if (!navigated) {
     navigated = await Promise.all([
       page
-        .waitForURL(/\/search\?/i, {
+        .waitForURL(searchUrlMatcher, {
           timeout: 15000,
           waitUntil: "domcontentloaded",
         })
@@ -694,8 +737,6 @@ export async function submitSearch(
   }
 
   if (!navigated) {
-    const searchUrl = new URL(`/search?q=${encodeURIComponent(keyword)}`, page.url()).toString();
-
     const opened = await openStableStorefrontPage(page, searchUrl, undefined, {
       attempts: 2,
       navigationTimeout: 15000,
@@ -706,8 +747,15 @@ export async function submitSearch(
       .catch(() => false);
 
     if (opened) {
-      navigated = /\/search(?:\?|$)/i.test(page.url());
+      navigated = matchesUrlWaitMatcher(page.url(), searchUrlMatcher);
     }
+  }
+
+  if (navigated) {
+    navigated = await recoverIfTemporaryErrorPage(page, searchUrl, {
+      timeout: 15000,
+      waitFor: searchUrlMatcher,
+    });
   }
 
   expect(navigated, "搜索表单未跳转到结果页").toBeTruthy();
@@ -734,22 +782,104 @@ async function findAddToCartButton(page: Page, timeout = 10000): Promise<Locator
 async function findCartProduct(page: Page, timeout = 8000): Promise<Locator | null> {
   return firstVisible(
     [
-      page.locator(`main a[href*="${ATHENA_PRO_SLUG}"]`).first(),
       page.locator(`#halo-cart-sidebar a[href*="${ATHENA_PRO_SLUG}"]`).first(),
+      page.locator("#halo-cart-sidebar").getByText(/Athena Pro/i),
       page
-        .locator("main a[href*='/products/']")
+        .locator(`main form[action*="/cart"] a[href*="${ATHENA_PRO_SLUG}"]`)
+        .first(),
+      page
+        .locator(`main [id*="cart" i] a[href*="${ATHENA_PRO_SLUG}"]`)
+        .first(),
+      page
+        .locator(`main [class*="cart" i] a[href*="${ATHENA_PRO_SLUG}"]`)
+        .first(),
+      page
+        .locator("main form[action*='/cart'] a[href*='/products/']")
         .filter({ hasText: /Athena Pro/i })
         .first(),
       page
         .locator("#halo-cart-sidebar a[href*='/products/']")
         .filter({ hasText: /Athena Pro/i })
         .first(),
+      page.locator("cart-items").getByText(/Athena Pro/i).first(),
+      page.locator("main .cart-item").filter({ hasText: /Athena Pro/i }).first(),
+      page.locator("main .line-item").filter({ hasText: /Athena Pro/i }).first(),
       page.locator(".cart-item__name").filter({ hasText: /Athena Pro/i }).first(),
       page.locator("[data-cart-item-title]").filter({ hasText: /Athena Pro/i }).first(),
-      page.locator(".cart-item").first(),
-      page.locator("[data-cart-item]").first(),
+      page.locator("#halo-cart-sidebar .cart-item").first(),
+      page.locator("main .cart-item").first(),
+      page.locator("main [data-cart-item]").first(),
     ],
     timeout,
+  );
+}
+
+async function findCartCheckoutButton(page: Page, timeout = 5000): Promise<Locator | null> {
+  return firstVisible(
+    [
+      page.locator("#halo-cart-sidebar #cart-sidebar-checkout").first(),
+      page.locator("#cart-sidebar-checkout").first(),
+      page.locator("#halo-cart-sidebar button").filter({ hasText: /checkout/i }).first(),
+      page.locator("#halo-cart-sidebar a").filter({ hasText: /checkout/i }).first(),
+      page.locator('main form[action*="/cart"] button[name="checkout"]').first(),
+      page.locator('main form[action*="/cart"] input[name="checkout"]').first(),
+      page.locator("main form[action*='/cart'] button").filter({ hasText: /checkout/i }).first(),
+      page.locator("main form[action*='/cart'] a").filter({ hasText: /checkout/i }).first(),
+      page.locator("main .cart__ctas button").filter({ hasText: /checkout/i }).first(),
+      page.locator("main .cart__ctas a").filter({ hasText: /checkout/i }).first(),
+      page.locator("main button.button-checkout").filter({ hasText: /checkout/i }).first(),
+      page.locator('main a.button-checkout[href*="/checkout"]').first(),
+      page.locator('main a[href="/checkout"]').first(),
+    ],
+    timeout,
+  );
+}
+
+async function findCartSummary(page: Page, timeout = 5000): Promise<Locator | null> {
+  return firstVisible(
+    [
+      page.locator("#halo-cart-sidebar").getByText(/subtotal|estimated total|total/i).first(),
+      page.locator("#halo-cart-sidebar .cart-sidebar-footer").first(),
+      page.locator("main form[action*='/cart']").getByText(/subtotal|estimated total|total/i).first(),
+      page.locator("main .cart__footer, main .cart__ctas, main .totals").first(),
+    ],
+    timeout,
+  );
+}
+
+async function findCartShell(page: Page, timeout = 3000): Promise<Locator | null> {
+  return firstVisible(
+    [
+      page.locator("#halo-cart-sidebar").getByText(/your cart|cart/i).first(),
+      page.locator("main form[action*='/cart']").first(),
+      page.locator("main cart-items").first(),
+      page.locator("main .cart, main .cart-page, main .cart__contents").first(),
+    ],
+    timeout,
+  );
+}
+
+type CartContentState = {
+  currentUrl: string;
+  cartHeading: Locator | null;
+  cartItem: Locator | null;
+  checkoutButton: Locator | null;
+  cartSummary: Locator | null;
+  cartShell: Locator | null;
+  cartCount: number | null;
+  emptyCartVisible: boolean;
+};
+
+function hasRecognizableCartContent(state: CartContentState): boolean {
+  const onCartUrl = /\/cart(?:[/?#]|$)/i.test(state.currentUrl);
+
+  return (
+    state.cartItem !== null ||
+    state.checkoutButton !== null ||
+    state.cartShell !== null ||
+    (onCartUrl && state.cartSummary !== null) ||
+    (onCartUrl && state.cartHeading !== null) ||
+    (onCartUrl && state.cartCount !== null && state.cartCount > 0)
   );
 }
 
@@ -757,7 +887,11 @@ async function hasEmptyCartState(page: Page, timeout = 2000): Promise<boolean> {
   const emptyState = await firstVisible(
     [
       page.getByText(/your shopping cart is empty/i).first(),
+      page.getByText(/your cart is empty/i).first(),
+      page.getByText(/cart is currently empty/i).first(),
       page.locator("#halo-cart-sidebar").getByText(/your shopping cart is empty/i),
+      page.locator("#halo-cart-sidebar").getByText(/your cart is empty/i),
+      page.locator("#halo-cart-sidebar").getByText(/cart is currently empty/i),
     ],
     timeout,
   );
@@ -770,20 +904,9 @@ async function isCartPageReady(page: Page, timeout = 3000): Promise<boolean> {
     return false;
   }
 
-  const [cartHeading, cartItem, emptyCartVisible] = await Promise.all([
-    firstVisible(
-      [
-        page.getByRole("heading", { name: /shopping cart|your cart/i }).first(),
-        page.locator("h1, h2").filter({ hasText: /shopping cart|your cart/i }).first(),
-        page.locator("#halo-cart-sidebar").getByText(/your cart/i),
-      ],
-      timeout,
-    ),
-    findCartProduct(page, timeout),
-    hasEmptyCartState(page, Math.min(timeout, 1000)),
-  ]);
+  const state = await readCartContentState(page, timeout);
 
-  return cartHeading !== null || cartItem !== null || emptyCartVisible;
+  return hasRecognizableCartContent(state) || state.emptyCartVisible;
 }
 
 async function waitForCartPageReady(page: Page, timeout = 15000): Promise<boolean> {
@@ -810,7 +933,10 @@ async function waitForCartReadySignal(
 
   while (Date.now() < deadline) {
     if (await isTemporaryErrorPage(page)) {
-      const recovered = await recoverTemporaryErrorPage(page, cartUrl, 15000);
+      const recovered = await recoverIfTemporaryErrorPage(page, cartUrl, {
+        timeout: 15000,
+        waitFor: /\/cart(?:[/?#]|$)/i,
+      });
       if (!recovered) {
         return false;
       }
@@ -819,11 +945,7 @@ async function waitForCartReadySignal(
       continue;
     }
 
-    if (/\/cart(?:[/?#]|$)/i.test(page.url())) {
-      return !(await isTemporaryErrorPage(page));
-    }
-
-    if (await isCartPageReady(page, 1000)) {
+    if (/\/cart(?:[/?#]|$)/i.test(page.url()) && (await isCartPageReady(page, 1000))) {
       return true;
     }
 
@@ -831,12 +953,14 @@ async function waitForCartReadySignal(
   }
 
   if (await isTemporaryErrorPage(page)) {
-    const recovered = await recoverTemporaryErrorPage(page, cartUrl, 15000);
+    const recovered = await recoverIfTemporaryErrorPage(page, cartUrl, {
+      timeout: 15000,
+      waitFor: /\/cart(?:[/?#]|$)/i,
+    });
     return recovered ? isCartPageReady(page, 2000) : false;
   }
 
-  return (/\/cart(?:[/?#]|$)/i.test(page.url()) && !(await isTemporaryErrorPage(page))) ||
-    isCartPageReady(page, 1000);
+  return /\/cart(?:[/?#]|$)/i.test(page.url()) && isCartPageReady(page, 1000);
 }
 
 type AddToCartSuccessSignals = {
@@ -868,7 +992,8 @@ async function readAddToCartSuccessSignals(
     cartSidebarVisible,
     viewCartVisible,
     drawerCheckoutVisible,
-    navigatedToCart: /\/cart(?:[/?#]|$)/i.test(page.url()),
+    navigatedToCart:
+      /\/cart(?:[/?#]|$)/i.test(page.url()) && !(await isTemporaryErrorPage(page)),
     cartIncreased:
       previousCount !== null && currentCount !== null && currentCount > previousCount,
   };
@@ -904,33 +1029,56 @@ async function waitForAddToCartSuccessSignals(
     latest = await readAddToCartSuccessSignals(page, previousCount, locators);
   }
 
+  if (/\/cart(?:[/?#]|$)/i.test(page.url()) && (await isTemporaryErrorPage(page))) {
+    const recovered = await recoverIfTemporaryErrorPage(
+      page,
+      new URL("/cart", page.url()).toString(),
+      {
+        timeout: 15000,
+        waitFor: /\/cart(?:[/?#]|$)/i,
+      },
+    );
+
+    if (recovered) {
+      latest = await readAddToCartSuccessSignals(page, previousCount, locators);
+    }
+  }
+
   return latest;
 }
-
-type CartContentState = {
-  cartHeading: Locator | null;
-  cartItem: Locator | null;
-  emptyCartVisible: boolean;
-};
 
 async function readCartContentState(
   page: Page,
   timeout = 3000,
 ): Promise<CartContentState> {
-  const [cartHeading, cartItem, emptyCartVisible] = await Promise.all([
-    firstVisible(
-      [
-        page.getByRole("heading", { name: /shopping cart|your cart|cart/i }).first(),
-        page.locator("h1, h2").filter({ hasText: /shopping cart|your cart|cart/i }).first(),
-        page.locator("#halo-cart-sidebar").getByText(/your cart|cart/i),
-      ],
-      timeout,
-    ),
-    findCartProduct(page, timeout),
-    hasEmptyCartState(page, Math.min(timeout, 1000)),
-  ]);
+  const [cartHeading, cartItem, checkoutButton, cartSummary, cartShell, cartCount, emptyCartVisible] =
+    await Promise.all([
+      firstVisible(
+        [
+          page.getByRole("heading", { name: /shopping cart|your cart|cart/i }).first(),
+          page.locator("h1, h2").filter({ hasText: /shopping cart|your cart|cart/i }).first(),
+          page.locator("#halo-cart-sidebar").getByText(/your cart|cart/i),
+        ],
+        timeout,
+      ),
+      findCartProduct(page, timeout),
+      findCartCheckoutButton(page, timeout),
+      findCartSummary(page, timeout),
+      findCartShell(page, timeout),
+      readCartCount(page),
+      hasEmptyCartState(page, Math.min(timeout, 1000)),
+    ]);
 
-  return { cartHeading, cartItem, emptyCartVisible };
+  return {
+    currentUrl: page.url(),
+    cartHeading,
+    cartItem,
+    checkoutButton,
+    cartSummary,
+    cartShell,
+    cartCount,
+    emptyCartVisible,
+  };
 }
 
 async function waitForCartContentState(
@@ -943,12 +1091,15 @@ async function waitForCartContentState(
 
   while (Date.now() < deadline) {
     if (await isTemporaryErrorPage(page)) {
-      await recoverTemporaryErrorPage(page, fallbackUrl, 15000);
+      await recoverIfTemporaryErrorPage(page, fallbackUrl, {
+        timeout: 15000,
+        waitFor: /\/cart(?:[/?#]|$)/i,
+      });
       latest = await readCartContentState(page, 1000);
       continue;
     }
 
-    if (latest.cartItem !== null || latest.emptyCartVisible) {
+    if (hasRecognizableCartContent(latest) || latest.emptyCartVisible) {
       return latest;
     }
 
@@ -996,6 +1147,13 @@ export async function openProductPdp(
       waitUntil: "domcontentloaded",
     })
     .catch(() => {});
+
+  const onExpectedPdp = await recoverIfTemporaryErrorPage(page, productUrl, {
+    timeout: 20000,
+    waitFor: new RegExp(`/products/${slug}(?:[/?#]|$)`, "i"),
+  });
+  expect(onExpectedPdp, `${title} PDP 仍停留在 Shopify 临时错误页或未回到目标商品页`).toBeTruthy();
+  await dismissOverlays(page);
 
   const productTitle = await firstVisible(
     [
@@ -1088,7 +1246,7 @@ export async function goToCart(page: Page, isMobile: boolean): Promise<void> {
   await closeSitePopups(page, 800);
   const cartUrl = new URL("/cart", page.url()).toString();
 
-  if (!(await isCartPageReady(page, 1500))) {
+  if (!/\/cart(?:[/?#]|$)/i.test(page.url())) {
     const cartEntry = await firstVisible(
       [
         page.locator('a.button-view-cart[href^="/cart"]'),
@@ -1117,8 +1275,13 @@ export async function goToCart(page: Page, isMobile: boolean): Promise<void> {
         [
           page.getByRole("heading", { name: /shopping cart|your cart/i }).first(),
           page.locator("h1, h2").filter({ hasText: /shopping cart|your cart/i }).first(),
+          page.locator("main form[action*='/cart']").first(),
+          page.locator("main cart-items").first(),
+          page.locator("main .cart, main .cart-page, main .cart__contents").first(),
           page.locator(".cart-item").first(),
           page.locator("[data-cart-item]").first(),
+          page.locator('main form[action*="/cart"] button[name="checkout"]').first(),
+          page.locator("main .cart__ctas, main .totals").first(),
         ],
         {
           attempts: 2,
@@ -1131,37 +1294,28 @@ export async function goToCart(page: Page, isMobile: boolean): Promise<void> {
   }
 
   await closeSitePopups(page, 800);
-  if (await isTemporaryErrorPage(page)) {
-    await recoverTemporaryErrorPage(page, cartUrl, 20000);
-  }
+  const recoveredCart = await recoverIfTemporaryErrorPage(page, cartUrl, {
+    timeout: 20000,
+    waitFor: /\/cart(?:[/?#]|$)/i,
+  });
+  expect(recoveredCart, "购物车跳转后仍停留在 Shopify 临时错误页或未回到购物车页").toBeTruthy();
 
-  expect(await isTemporaryErrorPage(page), "购物车跳转后仍停留在 Shopify 临时错误页").toBeFalsy();
-
-  const { cartHeading, cartItem, emptyCartVisible } = await waitForCartContentState(
+  const cartContent = await waitForCartContentState(
     page,
     cartUrl,
   );
 
-  expect(emptyCartVisible, "购物车仍然是空的").toBeFalsy();
+  expect(cartContent.emptyCartVisible, "购物车仍然是空的").toBeFalsy();
   expect(
-    cartItem !== null || cartHeading !== null,
-    "购物车未出现商品行或可识别的购物车内容",
+    hasRecognizableCartContent(cartContent),
+    "购物车未出现商品行、checkout 按钮、金额汇总或非零购物车数量",
   ).toBeTruthy();
 }
 
 export async function goToCheckout(page: Page): Promise<void> {
   await dismissOverlays(page);
 
-  const checkoutButton = await firstVisible(
-    [
-      page.locator("#cart-sidebar-checkout").filter({ hasText: /checkout/i }).first(),
-      page.locator("#halo-cart-sidebar button").filter({ hasText: /checkout/i }).first(),
-      page.locator("button.button-checkout").filter({ hasText: /checkout/i }).first(),
-      page.locator('a.button-checkout[href*="/checkout"]').first(),
-      page.locator('a[href="/checkout"]').first(),
-    ],
-    10000,
-  );
+  const checkoutButton = await findCartCheckoutButton(page, 10000);
   expect(checkoutButton, "购物车页未找到 checkout 按钮").not.toBeNull();
 
   await expect(checkoutButton!).toBeEnabled({ timeout: 5000 });
@@ -1211,6 +1365,19 @@ export async function goToCheckout(page: Page): Promise<void> {
     timeout: 20000,
     waitUntil: "domcontentloaded",
   }).catch(() => {});
+
+  const recoveredCheckout = await recoverIfTemporaryErrorPage(
+    page,
+    checkoutUrl ?? page.url(),
+    {
+      timeout: 20000,
+      waitFor: /\/checkouts?\/|\/checkout/i,
+    },
+  );
+  expect(
+    recoveredCheckout,
+    "checkout 跳转后仍停留在 Shopify 临时错误页或未回到 checkout",
+  ).toBeTruthy();
 
   const checkoutHeading = await firstVisible(
     [
