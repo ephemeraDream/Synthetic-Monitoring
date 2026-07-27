@@ -1,5 +1,12 @@
 import { expect, type Locator, type Page, type TestInfo } from "@playwright/test";
 import { VITALS_THRESHOLDS } from "../config/vitals_thresholds";
+import {
+  inspectCloudflareChallenge,
+  isCloudflareChallengePage,
+  startCloudflareChallengeCapture,
+  waitForCloudflareChallengeResolution,
+  type CloudflareChallengeOccurrence,
+} from "./cloudflareChallenge";
 import { attachHAR, buildHAR } from "./har";
 import {
   startNetworkCapture,
@@ -28,7 +35,9 @@ const TEMPORARY_ERROR_PAGE_PATTERNS = [
 export type JourneyPriority = keyof typeof VITALS_THRESHOLDS;
 
 export type JourneyDiagnostics = {
+  disposeCloudflareChallengeCapture: () => void;
   disposeNetworkCapture: () => void;
+  getCloudflareChallenges: () => CloudflareChallengeOccurrence[];
   getNetworkEntries: () => NetworkCaptureEntry[];
   getNetworkSummary: () => NetworkSummary;
   consoleLogs: Array<{ type: string; text: string }>;
@@ -77,6 +86,7 @@ export function setupJourneyDiagnostics(page: Page): JourneyDiagnostics {
   const consoleLogs: Array<{ type: string; text: string }> = [];
   const consoleErrors: string[] = [];
   const failedRequests: Array<{ url: string; failure: string }> = [];
+  const cloudflareChallengeCapture = startCloudflareChallengeCapture(page);
   const networkCapture = startNetworkCapture(page);
   let pageCrashed = false;
 
@@ -106,7 +116,9 @@ export function setupJourneyDiagnostics(page: Page): JourneyDiagnostics {
   });
 
   return {
+    disposeCloudflareChallengeCapture: cloudflareChallengeCapture.dispose,
     disposeNetworkCapture: networkCapture.dispose,
+    getCloudflareChallenges: cloudflareChallengeCapture.getOccurrences,
     getNetworkEntries: networkCapture.getEntries,
     getNetworkSummary: networkCapture.getSummary,
     consoleLogs,
@@ -239,7 +251,9 @@ async function gotoStorefrontPageOnce(
   timeout = 45000,
 ): Promise<void> {
   await page.goto(url, { waitUntil: "domcontentloaded", timeout });
-  await closeSitePopups(page);
+  if (!(await isCloudflareChallengePage(page))) {
+    await closeSitePopups(page);
+  }
 }
 
 export async function openStorefrontPage(
@@ -323,6 +337,14 @@ export async function recoverIfTemporaryErrorPage(
   },
 ): Promise<boolean> {
   const timeout = options?.timeout ?? 15000;
+  const challengeResolution = await waitForCloudflareChallengeResolution(
+    page,
+    Math.min(timeout, 12000),
+  );
+
+  if (challengeResolution === "blocked") {
+    return false;
+  }
 
   if (await isTemporaryErrorPage(page)) {
     const recovered = await recoverTemporaryErrorPage(page, fallbackUrl, timeout);
@@ -332,11 +354,17 @@ export async function recoverIfTemporaryErrorPage(
   }
 
   if (!options?.waitFor) {
-    return !(await isTemporaryErrorPage(page));
+    return (
+      !(await isTemporaryErrorPage(page)) &&
+      !(await isCloudflareChallengePage(page))
+    );
   }
 
   if (matchesUrlWaitMatcher(page.url(), options.waitFor)) {
-    return !(await isTemporaryErrorPage(page));
+    return (
+      !(await isTemporaryErrorPage(page)) &&
+      !(await isCloudflareChallengePage(page))
+    );
   }
 
   const matched = await waitForMatchedCurrentUrl(
@@ -345,7 +373,11 @@ export async function recoverIfTemporaryErrorPage(
     Math.min(timeout, 10000),
   );
 
-  return matched && !(await isTemporaryErrorPage(page));
+  return (
+    matched &&
+    !(await isTemporaryErrorPage(page)) &&
+    !(await isCloudflareChallengePage(page))
+  );
 }
 
 export async function openStableStorefrontPage(
@@ -394,6 +426,10 @@ export async function openStableStorefrontPage(
   }
 
   expect(await isTemporaryErrorPage(page), "页面仍然停留在站点错误页").toBeFalsy();
+  expect(
+    await isCloudflareChallengePage(page),
+    "页面仍然停留在 Cloudflare 人机验证页",
+  ).toBeFalsy();
 
   if (readyLocators?.length) {
     const ready = await firstVisible(readyLocators, readyTimeout);
@@ -1298,7 +1334,10 @@ export async function goToCart(page: Page, isMobile: boolean): Promise<void> {
     timeout: 20000,
     waitFor: /\/cart(?:[/?#]|$)/i,
   });
-  expect(recoveredCart, "购物车跳转后仍停留在 Shopify 临时错误页或未回到购物车页").toBeTruthy();
+  expect(
+    recoveredCart,
+    "购物车跳转后仍停留在临时错误页、Cloudflare 人机验证页或未回到购物车页",
+  ).toBeTruthy();
 
   const cartContent = await waitForCartContentState(
     page,
@@ -1376,7 +1415,7 @@ export async function goToCheckout(page: Page): Promise<void> {
   );
   expect(
     recoveredCheckout,
-    "checkout 跳转后仍停留在 Shopify 临时错误页或未回到 checkout",
+    "checkout 跳转后仍停留在临时错误页、Cloudflare 人机验证页或未回到 checkout",
   ).toBeTruthy();
 
   const checkoutHeading = await firstVisible(
@@ -1447,10 +1486,32 @@ export async function attachJourneyEvidence(
     shouldAttachExtendedEvidence || diagnostics.consoleErrors.length > 0;
 
   try {
+    if (!page.isClosed()) {
+      await inspectCloudflareChallenge(page).catch(() => null);
+    }
+
     await testInfo.attach("network-summary", {
       body: JSON.stringify(diagnostics.getNetworkSummary(), null, 2),
       contentType: "application/json",
     });
+
+    const cloudflareChallenges = diagnostics.getCloudflareChallenges();
+    if (cloudflareChallenges.length > 0) {
+      await testInfo.attach("cloudflare-challenges", {
+        body: JSON.stringify(
+          {
+            total: cloudflareChallenges.length,
+            unresolved: cloudflareChallenges.filter(
+              (challenge) => !challenge.resolvedAt,
+            ).length,
+            occurrences: cloudflareChallenges,
+          },
+          null,
+          2,
+        ),
+        contentType: "application/json",
+      });
+    }
 
     if (shouldAttachExtendedEvidence) {
       const url = page.isClosed() ? "" : page.url();
@@ -1561,6 +1622,7 @@ export async function attachJourneyEvidence(
       }
     }
   } finally {
+    diagnostics.disposeCloudflareChallengeCapture();
     diagnostics.disposeNetworkCapture();
   }
 }
