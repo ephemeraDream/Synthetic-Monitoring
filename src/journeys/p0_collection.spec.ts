@@ -15,6 +15,7 @@ import {
 
 type CollectionConfig = {
   expectedCollectionText: RegExp;
+  expectedHeadingText?: RegExp;
   expectedProductText: RegExp;
   landingLinkText: RegExp;
   name: string;
@@ -33,7 +34,8 @@ const COLLECTIONS: CollectionConfig[] = [
     name: "Desks",
     path: "/collections/desks",
     landingLinkText: /All Desks/i,
-    expectedCollectionText: /Blacklyte desks/i,
+    expectedCollectionText: /Blacklyte (?:gaming & standing )?desks/i,
+    expectedHeadingText: /^Blacklyte (?:Gaming & Standing )?Desks$/i,
     expectedProductText: /Atlas Desk|Atlas Lite Standing Desk/i,
   },
   {
@@ -155,8 +157,21 @@ async function assertCollectionPage(
 ): Promise<void> {
   await expect(page.locator("main")).toBeVisible({ timeout: 10000 });
 
+  if (config.expectedHeadingText) {
+    await expect(
+      page.getByRole("heading", {
+        name: config.expectedHeadingText,
+        level: 1,
+      }),
+      `${config.name} 分类页标题未出现`,
+    ).toBeVisible({ timeout: 10000 });
+  }
+
   const collectionTitle = await firstVisible(
     [
+      page
+        .getByRole("heading", { name: config.expectedCollectionText, level: 1 })
+        .first(),
       page
         .locator(".collection_head_new_select_title")
         .filter({ hasText: config.expectedCollectionText })
@@ -182,50 +197,61 @@ async function assertCollectionPage(
     .catch(() => false);
 
   expect(
-    collectionTitle !== null || mainHasCollectionText,
+    config.expectedHeadingText !== undefined ||
+      collectionTitle !== null ||
+      mainHasCollectionText,
     `${config.name} 分类页标题未出现`,
   ).toBeTruthy();
 
-  const productGrid = await firstVisible(
-    [
-      page.locator(".collection-banner-adv .collection .productGrid").first(),
-      page.locator(".new-chairs-collection-section .productGrid").first(),
-      page.locator(".productGrid").first(),
-    ],
-    10000,
-  );
-  expect(productGrid, `${config.name} 分类页商品列表容器未出现`).not.toBeNull();
+  await page.evaluate(() => window.scrollBy(0, window.innerHeight));
 
-  const productLink = await firstVisible(
-    [
-      page
-        .locator("main a[href*='/products/']")
-        .filter({ hasText: config.expectedProductText })
-        .first(),
-      page
-        .locator(".variable-products a[href*='/products/']")
-        .filter({ hasText: config.expectedProductText })
-        .first(),
-      page
-        .locator(".product-item a[href*='/products/']")
-        .filter({ hasText: config.expectedProductText })
-        .first(),
-    ],
-    10000,
-  );
-  expect(productLink, `${config.name} 分类页未出现真实商品链接`).not.toBeNull();
+  const expectedProductLink = page
+    .locator("a[href*='/products/']")
+    .filter({ hasText: config.expectedProductText });
+  const productGridCandidates = [
+    page.locator("#main-collection-product-grid").filter({ has: expectedProductLink }),
+    page
+      .locator(".collection-banner-adv .collection .productGrid")
+      .filter({ has: expectedProductLink }),
+    page
+      .locator(".new-chairs-collection-section .productGrid")
+      .filter({ has: expectedProductLink }),
+    page.locator(".productGrid").filter({ has: expectedProductLink }),
+    page.getByRole("list").filter({ has: expectedProductLink }),
+  ];
+  let productGrid: Locator | null = null;
 
-  const visibleProductCards = await page
-    .locator(".variable-products, .product-item")
-    .evaluateAll((nodes) =>
-      nodes.filter(
-        (node) =>
-          node instanceof HTMLElement &&
-          !!(node.offsetWidth || node.offsetHeight || node.getClientRects().length),
-      ).length,
+  await expect
+    .poll(
+      async () => {
+        productGrid = await firstVisible(productGridCandidates, 1000);
+        return productGrid !== null;
+      },
+      {
+        timeout: 30000,
+        message: `${config.name} 分类页商品列表容器未出现`,
+      },
     )
-    .catch(() => 0);
-  expect(visibleProductCards, `${config.name} 分类页没有可见商品卡`).toBeGreaterThan(0);
+    .toBeTruthy();
+
+  const confirmedProductGrid = productGrid!;
+  const productLink = confirmedProductGrid
+    .locator("a[href*='/products/']")
+    .filter({ hasText: config.expectedProductText, visible: true })
+    .first();
+  await expect(
+    productLink,
+    `${config.name} 分类页未出现真实商品链接`,
+  ).toBeVisible({ timeout: 10000 });
+
+  const productCard = confirmedProductGrid
+    .locator(".variable-products, .product-item")
+    .filter({ visible: true })
+    .first();
+  await expect(
+    productCard,
+    `${config.name} 分类页没有可见商品卡`,
+  ).toBeVisible({ timeout: 10000 });
 }
 
 test.describe("P0_COLLECTION - 分类页列表", () => {
