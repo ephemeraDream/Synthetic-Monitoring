@@ -4,6 +4,7 @@ import { installWebVitalsCollector } from "../utils/vitals";
 import {
   addCurrentProductToCart,
   applyDeterministicJourneyHeaders,
+  assertSearchResultsReady,
   ATHENA_PRO_SLUG,
   ATHENA_PRO_TITLE,
   attachJourneyEvidence,
@@ -63,35 +64,21 @@ test.describe("P0_COMPLETE_USER_JOURNEY - 完整用户旅程", () => {
         const searchInput = await openSearchInput(page, isMobile);
         await submitSearch(page, searchInput, SEARCH_KEYWORD, isMobile);
 
-        const searchHeading = await firstVisible(
-          [
-            page.locator("h1.page-header").filter({ hasText: /Athena Pro/i }).first(),
-            page.getByRole("heading", { name: /results found for/i }).first(),
-          ],
-          10000,
-        );
-        expect(searchHeading, "搜索结果标题未出现").not.toBeNull();
+        await assertSearchResultsReady(page, SEARCH_KEYWORD);
 
-        const resultLink = await firstVisible(
-          [
-            page
-              .locator(`main a.product_categories_product[href*="${ATHENA_PRO_SLUG}"]`)
-              .first(),
-            page.locator(`main a[href*="${ATHENA_PRO_SLUG}?variant="]`).first(),
-            page
-              .locator(`main a[href*="${ATHENA_PRO_SLUG}"]`)
-              .filter({ hasText: /Athena Pro/i })
-              .first(),
-          ],
-          10000,
-        );
-        expect(resultLink, "未找到 Athena Pro 搜索结果").not.toBeNull();
+        const resultLink = page
+          .getByRole("main")
+          .getByRole("link", { name: /Athena Pro/i })
+          .and(page.locator(`main a[href*="/products/${ATHENA_PRO_SLUG}"]`))
+          .filter({ visible: true })
+          .first();
+        await expect(resultLink, "未找到 Athena Pro 搜索结果").toBeVisible();
 
         await captureJourneyVitalsCheckpoint(page, diagnostics, "search-results");
 
         await navigateByLocatorHref(
           page,
-          resultLink!,
+          resultLink,
           new RegExp(`/products/${ATHENA_PRO_SLUG}(?:[/?#]|$)`, "i"),
           15000,
         );

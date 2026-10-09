@@ -3,6 +3,7 @@ import { getCurrentTarget } from "../config/targets";
 import { installWebVitalsCollector } from "../utils/vitals";
 import {
   applyDeterministicJourneyHeaders,
+  assertSearchResultsReady,
   attachJourneyEvidence,
   captureJourneyVitalsCheckpoint,
   closeSitePopups,
@@ -89,67 +90,40 @@ async function assertSearchResults(
   page: Page,
   caseConfig: SearchCase,
 ): Promise<Locator> {
-  const resultsHeading = await firstVisible(
-    [
-      page.locator("h1.page-header").filter({ hasText: new RegExp(caseConfig.term, "i") }).first(),
-      page.getByRole("heading", { name: /results found for/i }).first(),
-      page.locator("main h1").first(),
-    ],
-    10000,
-  );
+  await assertSearchResultsReady(page, caseConfig.term);
 
-  const mainHasSearchSummary = await expect
-    .poll(
-      async () => {
-        const text = await page.locator("main").textContent().catch(() => null);
-        return (
-          /results found for/i.test(text ?? "") &&
-          new RegExp(caseConfig.term, "i").test(text ?? "")
-        );
-      },
-      {
-        timeout: 10000,
-        message: `${caseConfig.term} 搜索结果页未出现结果摘要`,
-      },
+  const main = page.getByRole("main");
+  const visibleProducts = main.locator('a[href*="/products/"]').filter({ visible: true });
+  const viewAll = main
+    .getByRole("button", { name: /^view all$/i })
+    .and(main.locator('[data-search-view-all][data-target^="SearchProductResults-"]'))
+    .first();
+
+  // 新版仅展示部分变体，有展开入口时验证它确实显示了更多商品。
+  if (await viewAll.isVisible()) {
+    const initialCount = await visibleProducts.count();
+    await closeSitePopups(page, 800);
+    await viewAll.click();
+    await expect(viewAll, "展开商品结果后 View All 按钮未收起").toBeHidden();
+    await expect
+      .poll(() => visibleProducts.count(), {
+        message: "View All 未展示更多商品结果",
+      })
+      .toBeGreaterThan(initialCount);
+  }
+
+  const resultLink = main
+    .getByRole("link", { name: caseConfig.expectedResultText })
+    .and(
+      main.locator(
+        caseConfig.resultSlugs.map((slug) => `a[href*="/products/${slug}"]`).join(", "),
+      ),
     )
-    .toBeTruthy()
-    .then(() => true)
-    .catch(() => false);
+    .filter({ visible: true })
+    .first();
+  await expect(resultLink, `${caseConfig.term} 未出现符合预期的搜索结果`).toBeVisible();
 
-  expect(
-    resultsHeading !== null || mainHasSearchSummary,
-    `${caseConfig.term} 搜索结果标题未出现`,
-  ).toBeTruthy();
-
-  const visibleResultCount = await page
-    .locator("main a[href*='/products/']")
-    .evaluateAll((nodes) =>
-      nodes.filter(
-        (node) =>
-          node instanceof HTMLElement &&
-          !!(node.offsetWidth || node.offsetHeight || node.getClientRects().length),
-      ).length,
-    )
-    .catch(() => 0);
-  expect(visibleResultCount, `${caseConfig.term} 搜索结果没有可见商品链接`).toBeGreaterThan(0);
-
-  const resultLinkLocators = [
-    ...caseConfig.resultSlugs.map((slug) =>
-      page
-        .locator(`main a[href*="${slug}"]`)
-        .filter({ hasText: caseConfig.expectedResultText })
-        .first(),
-    ),
-    page
-      .locator("main a[href*='/products/']")
-      .filter({ hasText: caseConfig.expectedResultText })
-      .first(),
-  ];
-
-  const resultLink = await firstVisible(resultLinkLocators, 10000);
-  expect(resultLink, `${caseConfig.term} 未出现符合预期的搜索结果`).not.toBeNull();
-
-  return resultLink!;
+  return resultLink;
 }
 
 async function openSearchResultPdp(

@@ -795,7 +795,35 @@ export async function submitSearch(
   }
 
   expect(navigated, "搜索表单未跳转到结果页").toBeTruthy();
-  await dismissOverlays(page);
+  // 结果页搜索框会 autofocus；全局 Escape 会清空 Chromium 的搜索框。
+  await closeSitePopups(page, 800);
+}
+
+export async function assertSearchResultsReady(
+  page: Page,
+  keyword: string,
+): Promise<void> {
+  await expect(page, `${keyword} 未进入对应的搜索结果页`).toHaveURL(
+    (url) => /\/search\/?$/i.test(url.pathname) && url.searchParams.get("q") === keyword,
+    { timeout: 10000 },
+  );
+
+  const main = page.getByRole("main");
+  const searchInput = main.getByRole("searchbox").first();
+  await expect(searchInput, "搜索结果页输入框未出现").toBeVisible();
+  await expect(searchInput, "搜索结果页关键词与搜索意图不一致").toHaveValue(keyword);
+
+  // 新版标题被隐藏，关键词由搜索框呈现；兼容旧版的可见结果标题。
+  const resultsSummary = main
+    .getByText(/\b\d+\s+results?\s+found\b/i)
+    .or(main.getByRole("heading", { name: /search results for|results found for/i }))
+    .filter({ visible: true })
+    .first();
+  await expect(resultsSummary, `${keyword} 搜索结果摘要未出现`).toBeVisible();
+  await expect(
+    main.locator('a[href*="/products/"]').filter({ visible: true }).first(),
+    `${keyword} 搜索结果没有可见商品链接`,
+  ).toBeVisible();
 }
 
 async function findAddToCartButton(page: Page, timeout = 10000): Promise<Locator | null> {
