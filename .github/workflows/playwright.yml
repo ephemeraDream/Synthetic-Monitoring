@@ -20,7 +20,7 @@ jobs:
       fail-fast: false
       matrix:
         project: [desktop-chromium, mobile-iphone, mobile-android]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 45
     env:
       PLAYWRIGHT_WORKERS: "3"
@@ -30,7 +30,7 @@ jobs:
 
       - uses: actions/setup-node@v5
         with:
-          node-version: lts/*
+          node-version: 22.x
           cache: npm
           cache-dependency-path: package-lock.json
 
