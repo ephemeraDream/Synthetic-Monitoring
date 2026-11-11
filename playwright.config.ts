@@ -1,20 +1,44 @@
 import { defineConfig, devices } from "@playwright/test";
 
 const DEFAULT_CI_WORKERS = 2;
-const ciWorkers = Number(process.env.PLAYWRIGHT_WORKERS ?? DEFAULT_CI_WORKERS);
+const DEFAULT_CI_RETRIES = 1;
+const DEFAULT_TEST_TIMEOUT_MS = 120_000;
+
+function positiveNumberOrFallback(value: string | undefined, fallback: number): number {
+  const parsed = Number(value ?? fallback);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function nonNegativeIntegerOrFallback(value: string | undefined, fallback: number): number {
+  const parsed = Number(value ?? fallback);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback;
+}
+
+const ciWorkers = positiveNumberOrFallback(
+  process.env.PLAYWRIGHT_WORKERS,
+  DEFAULT_CI_WORKERS,
+);
+const ciRetries = nonNegativeIntegerOrFallback(
+  process.env.PLAYWRIGHT_RETRIES,
+  DEFAULT_CI_RETRIES,
+);
+const testTimeout = positiveNumberOrFallback(
+  process.env.PLAYWRIGHT_TEST_TIMEOUT,
+  DEFAULT_TEST_TIMEOUT_MS,
+);
 
 export default defineConfig({
   testDir: "./src/journeys",
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 2 : 0,
+  retries: process.env.CI ? ciRetries : 0,
   workers:
     process.env.CI
       ? Number.isFinite(ciWorkers) && ciWorkers > 0
         ? ciWorkers
         : DEFAULT_CI_WORKERS
       : undefined,
-  timeout: 600000,
+  timeout: testTimeout,
   expect: {
     timeout: 10000,
   },
