@@ -11,17 +11,13 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: synthetic-monitor-${{ github.workflow }}-${{ github.event.schedule || github.ref }}
-  cancel-in-progress: true
+  group: synthetic-monitor-${{ github.event.schedule }}
+  cancel-in-progress: false
 
 jobs:
   monitor:
-    strategy:
-      fail-fast: false
-      matrix:
-        project: [desktop-chromium, mobile-iphone, mobile-android]
     runs-on: ubuntu-22.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       PLAYWRIGHT_WORKERS: "3"
 
@@ -46,7 +42,7 @@ jobs:
         run: npm ci
 
       - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --with-deps chromium webkit
 
       # 根据 cron 判断国家
       - name: Set TARGET by cron
@@ -68,10 +64,10 @@ jobs:
           fi
 
       - name: Run Playwright tests
-        run: npx playwright test --project="${{ matrix.project }}"
+        run: npx playwright test
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
-          name: playwright-report-${{ matrix.project }}
+          name: playwright-report
           path: playwright-report/
           retention-days: 30
